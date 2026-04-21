@@ -28,8 +28,13 @@ $StateDir   = "$env:LOCALAPPDATA\WebizInventory"
 $StateFile  = "$StateDir\state.json"
 $QueueFile  = "$StateDir\queue.json"
 $LogFile    = "$StateDir\agent.log"
+# Resolve current script/exe path
+# - PS1 mode : $MyInvocation.MyCommand.Path holds the .ps1 path
+# - EXE mode : $PSCommandPath is null in ps2exe, use Process.MainModule.FileName instead
+$ScriptPath = if ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path } `
+              else { [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName }
 # Detect whether we are running as a compiled EXE (ps2exe) or a plain PS1
-$IsExe      = $PSCommandPath -like "*.exe"
+$IsExe      = $ScriptPath -like "*.exe" -and $ScriptPath -notlike "*powershell*" -and $ScriptPath -notlike "*pwsh*"
 $ScriptDest = if ($IsExe) { "$StateDir\WebizInventory_Windows.exe" } `
                           else { "$StateDir\WebizInventory_Windows.ps1" }
 $CredVaultResource = "WebizInventoryAgent"   # key name in Windows Credential Manager
@@ -85,13 +90,13 @@ function Invoke-SelfUpdate {
     try {
         Write-Log "Checking for updates…"
         $new  = (Invoke-WebRequest -Uri $GitHubRawUrl -UseBasicParsing -TimeoutSec 8).Content
-        $cur  = Get-Content -Path $PSCommandPath -Raw -ErrorAction SilentlyContinue
+        $cur  = Get-Content -Path $ScriptPath -Raw -ErrorAction SilentlyContinue
         $hash = { param($s) [System.Security.Cryptography.SHA256]::Create().ComputeHash(
                       [System.Text.Encoding]::UTF8.GetBytes($s)) }
         if ((&$hash $new) -ne (&$hash $cur)) {
             $tmp = [System.IO.Path]::GetTempFileName() + ".ps1"
             $new | Out-File -FilePath $tmp -Encoding UTF8
-            if ($PSCommandPath -eq $ScriptDest) {
+            if ($ScriptPath -eq $ScriptDest) {
                 # Running from installed location — replace and restart silently
                 Write-Log "Update found — scheduling replacement and restart."
                 $cmd = "timeout /t 2 /nobreak >nul & copy /Y `"$tmp`" `"$ScriptDest`" & " +
@@ -303,7 +308,7 @@ function Show-InventoryForm {
     $hdr.Controls.Add($logoLbl)
 
     # Logo image override (place webiz_logo.png next to this script)
-    $logoFile = Join-Path (Split-Path $PSCommandPath) "webiz_logo.png"
+    $logoFile = Join-Path (Split-Path $ScriptPath) "webiz_logo.png"
     if (Test-Path $logoFile) {
         try {
             $img           = [System.Drawing.Image]::FromFile($logoFile)
@@ -495,7 +500,7 @@ function Show-InventoryForm {
 # ════════════════════════════════════════════════════════════════════════════════
 function Register-StartupTask {
     # Copy script to a stable path so the task still works if the original is deleted
-    Copy-Item -Path $PSCommandPath -Destination $ScriptDest -Force
+    Copy-Item -Path $ScriptPath -Destination $ScriptDest -Force
 
     # EXE runs directly; PS1 needs the powershell.exe wrapper
     $action = if ($IsExe) {
