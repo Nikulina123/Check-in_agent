@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# ════════════════════════════════════════════════════════════════════════════════
+#  Webiz Inventory Agent — Linux Installer
+#  Single-file: just run this once.  Everything else is automatic.
+#
+#  Usage:  chmod +x WebizInventory_Linux.sh && ./WebizInventory_Linux.sh
+#  Note:   Does NOT require root.  dmidecode (serial number) needs sudo — the
+#          script configures a passwordless sudoers rule automatically.
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ─── CONFIGURATION — edit these two lines before distributing ────────────────
+APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycbxUVGyr5SuH7gjEc7zS5CcZkDV03qVGw7JbPHwvTFwLEUImY3xbRE8V8D4SQNalBMUdGw/exec"          # ← FILL IN
+GITHUB_RAW_URL="https://raw.githubusercontent.com/YOUR_ORG/webiz-inventory/main/inventory_agent.py"  # ← FILL IN
+# ─────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+AGENT_DIR="$HOME/.webiz_inventory"
+AGENT_FILE="$AGENT_DIR/inventory_agent.py"
+CONFIG_FILE="$AGENT_DIR/config.json"
+UNIT_DIR="$HOME/.config/systemd/user"
+SERVICE_NAME="webiz-inventory"
+
+echo ""
+echo "┌─────────────────────────────────────────┐"
+echo "│   Webiz Inventory Agent – Linux Setup   │"
+echo "└─────────────────────────────────────────┘"
+echo ""
+
+# ── Step 1: Locate Python 3 ───────────────────────────────────────────────────
+echo "[1/6] Locating Python 3…"
+PYTHON3=""
+for candidate in python3 python; do
+    if command -v "$candidate" &>/dev/null; then
+        ver=$("$candidate" --version 2>&1 || true)
+        if [[ "$ver" == Python\ 3* ]]; then
+            PYTHON3=$(command -v "$candidate")
+            echo "      Found: $PYTHON3  ($ver)"
+            break
+        fi
+    fi
+done
+
+if [[ -z "$PYTHON3" ]]; then
+    echo "      Python 3 not found — attempting to install…"
+    if   command -v apt-get &>/dev/null; then sudo apt-get install -y python3
+    elif command -v dnf     &>/dev/null; then sudo dnf install -y python3
+    elif command -v pacman  &>/dev/null; then sudo pacman -S --noconfirm python
+    else
+        echo "  [ERROR] Cannot auto-install Python 3. Please install it manually."
+        exit 1
+    fi
+    PYTHON3=$(command -v python3)
+fi
+
+# Check tkinter
+echo "      Checking tkinter…"
+if ! "$PYTHON3" -c "import tkinter" 2>/dev/null; then
+    echo "      tkinter missing — installing…"
+    if   command -v apt-get &>/dev/null; then sudo apt-get install -y python3-tk
+    elif command -v dnf     &>/dev/null; then sudo dnf install -y python3-tkinter
+    elif command -v pacman  &>/dev/null; then sudo pacman -S --noconfirm tk
+    else
+        echo "  [WARN] Could not auto-install tkinter. Install python3-tk manually."
+    fi
+fi
+echo "      Python + tkinter: OK"
+
+# ── Step 2: Configure sudo for dmidecode (hardware serial number) ─────────────
+echo ""
+echo "[2/6] Configuring sudo for dmidecode (serial number collection)…"
+SUDOERS_LINE="$USER ALL=(ALL) NOPASSWD: /usr/sbin/dmidecode"
+SUDOERS_FILE="/etc/sudoers.d/webiz-inventory"
+if sudo sh -c "echo '$SUDOERS_LINE' > '$SUDOERS_FILE' && chmod 0440 '$SUDOERS_FILE'" 2>/dev/null; then
+    echo "      Sudoers rule created: $SUDOERS_FILE"
+else
+    echo "      [WARN] Could not create sudoers rule. Serial Number may show as N/A."
+    echo "             To fix: sudo sh -c \"echo '$SUDOERS_LINE' > $SUDOERS_FILE && chmod 0440 $SUDOERS_FILE\""
+fi
+
+# ── Step 3: Download the agent ────────────────────────────────────────────────
+echo ""
+echo "[3/6] Downloading inventory agent from GitHub…"
+mkdir -p "$AGENT_DIR"
+
+if command -v curl &>/dev/null; then
+    curl -fsSL "$GITHUB_RAW_URL" -o "$AGENT_FILE"
+elif command -v wget &>/dev/null; then
+    wget -q "$GITHUB_RAW_URL" -O "$AGENT_FILE"
+else
+    "$PYTHON3" -c "
+import urllib.request
+urllib.request.urlretrieve('$GITHUB_RAW_URL', '$AGENT_FILE')
+print('      Downloaded via Python urllib.')
+"
+fi
+chmod +x "$AGENT_FILE"
+echo "      Agent saved to: $AGENT_FILE"
+
+# ── Step 4: Write config ──────────────────────────────────────────────────────
+echo ""
+echo "[4/6] Writing configuration…"
+cat > "$CONFIG_FILE" <<JSON
+{
+  "apps_script_url": "$APPS_SCRIPT_URL",
+  "github_raw_url":  "$GITHUB_RAW_URL"
+}
+JSON
+echo "      Config: $CONFIG_FILE"
+
+# ── Step 5: First manual run ──────────────────────────────────────────────────
+echo ""
+echo "[5/6] Running agent for the first time…"
+DISPLAY="${DISPLAY:-:0}" "$PYTHON3" "$AGENT_FILE" || true
+
+# ── Step 6: Install systemd user service + timer ─────────────────────────────
+echo ""
+echo "[6/6] Installing systemd user service and timer…"
+mkdir -p "$UNIT_DIR"
+
+cat > "$UNIT_DIR/${SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=Webiz Inventory Agent
+After=graphical-session.target network-online.target
+Wants=graphical-session.target
+
+[Service]
+Type=oneshot
+# 90-second delay so the desktop session is fully ready
+ExecStartPre=/bin/sleep 90
+ExecStart=${PYTHON3} ${AGENT_FILE}
+WorkingDirectory=${AGENT_DIR}
+Environment=DISPLAY=:0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+
+# Timer: fires at login + re-checks once daily (agent exits immediately if < 6 months)
+cat > "$UNIT_DIR/${SERVICE_NAME}.timer" <<EOF
+[Unit]
+Description=Webiz Inventory Agent – 6-month check-in timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1d
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable lingering so user units survive logout (needed if the user has no active session)
+loginctl enable-linger "$USER" 2>/dev/null || true
+
+systemctl --user daemon-reload
+systemctl --user enable --now "${SERVICE_NAME}.timer"
+systemctl --user enable "${SERVICE_NAME}.service"
+
+# ── GPG signing (optional, requires gpg) ─────────────────────────────────────
+if command -v gpg &>/dev/null; then
+    echo ""
+    echo "      GPG found — signing agent script…"
+    gpg --batch --yes --armor --detach-sign "$AGENT_FILE" 2>/dev/null && \
+        echo "      Signature: ${AGENT_FILE}.asc" || \
+        echo "      [WARN] GPG signing failed (no default key?). Agent will still run."
+fi
+
+echo ""
+echo "✔  Installation complete."
+echo ""
+echo "   The agent runs at every login via systemd timer."
+echo "   It shows the form only when 6 months have passed since the last check-in."
+echo ""
+echo "   Useful commands:"
+echo "   systemctl --user status  ${SERVICE_NAME}.timer    # check timer status"
+echo "   systemctl --user start   ${SERVICE_NAME}.service  # trigger manually"
+echo "   journalctl --user -u     ${SERVICE_NAME}.service  # view logs"
+echo "   tail -f ${AGENT_DIR}/agent.log                     # live log"
+echo ""
+echo "   To uninstall:"
+echo "   systemctl --user disable --now ${SERVICE_NAME}.timer ${SERVICE_NAME}.service"
+echo "   rm ~/.config/systemd/user/${SERVICE_NAME}.*"
+echo "   sudo rm /etc/sudoers.d/webiz-inventory"
+echo ""

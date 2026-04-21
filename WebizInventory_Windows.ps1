@@ -1,0 +1,606 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Webiz Inventory Agent for Windows — self-contained, no Python needed.
+    First run: Right-click → Run with PowerShell  (or run as any user).
+    After that: registered in Task Scheduler, runs silently at every login,
+                shows the form only when 6 months have elapsed.
+#>
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  CONFIGURATION — edit these two lines before distributing
+# ════════════════════════════════════════════════════════════════════════════════
+$AppsScriptUrl = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"   # ← FILL IN
+$GitHubRawUrl  = "https://raw.githubusercontent.com/YOUR_ORG/webiz-inventory/main/WebizInventory_Windows.ps1"  # ← FILL IN
+# ════════════════════════════════════════════════════════════════════════════════
+
+$SmtpServer       = "smtp.gmail.com"
+$SmtpPort         = 587
+$SmtpUser         = "monitoring@webiz.com"
+$SmtpPass         = "hogpycseljffcgwy"
+$AdminEmail       = "nika@webiz.com"
+$IntervalMonths   = 6
+$CancelRetryHours = 24
+$TaskName         = "WebizInventoryAgent"
+$Projects         = @("Webiz ERP","Fundbox","Playtika","Artlist","The5%ers","Other")
+
+$StateDir   = "$env:LOCALAPPDATA\WebizInventory"
+$StateFile  = "$StateDir\state.json"
+$QueueFile  = "$StateDir\queue.json"
+$LogFile    = "$StateDir\agent.log"
+$ScriptDest = "$StateDir\WebizInventory_Windows.ps1"
+
+# ── Ensure state dir ─────────────────────────────────────────────────────────
+if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+function Write-Log {
+    param([string]$Msg, [string]$Level = "INFO")
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $Level  $Msg"
+    Add-Content -Path $LogFile -Value $line -Encoding UTF8
+    Write-Host $line
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  SELF-UPDATE
+# ════════════════════════════════════════════════════════════════════════════════
+function Invoke-SelfUpdate {
+    if (-not $GitHubRawUrl -or $GitHubRawUrl -like "*YOUR_ORG*") { return }
+    try {
+        Write-Log "Checking for updates…"
+        $new  = (Invoke-WebRequest -Uri $GitHubRawUrl -UseBasicParsing -TimeoutSec 8).Content
+        $cur  = Get-Content -Path $PSCommandPath -Raw -ErrorAction SilentlyContinue
+        $hash = { param($s) [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+                      [System.Text.Encoding]::UTF8.GetBytes($s)) }
+        if ((&$hash $new) -ne (&$hash $cur)) {
+            Write-Log "Update found — scheduling replacement and restart."
+            $tmp = [System.IO.Path]::GetTempFileName() + ".ps1"
+            $new | Out-File -FilePath $tmp -Encoding UTF8
+            # Copy over after script exits, then restart from destination
+            $cmd = "timeout /t 2 /nobreak >nul & copy /Y `"$tmp`" `"$ScriptDest`" & " +
+                   "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptDest`""
+            Start-Process "cmd.exe" -ArgumentList "/c $cmd" -WindowStyle Hidden
+            exit 0
+        }
+    } catch {
+        Write-Log "Update check failed: $_" "WARN"
+    }
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  6-MONTH + 24 H GUARD
+# ════════════════════════════════════════════════════════════════════════════════
+function Get-State {
+    if (Test-Path $StateFile) {
+        try { return Get-Content $StateFile -Raw | ConvertFrom-Json }
+        catch {}
+    }
+    return [PSCustomObject]@{ last_run = $null; cancelled_at = $null }
+}
+
+function Save-State($state) {
+    $state | ConvertTo-Json | Set-Content -Path $StateFile -Encoding UTF8
+}
+
+function Test-ShouldRun {
+    $state = Get-State
+    $now   = Get-Date
+
+    if ($state.last_run) {
+        $last    = [datetime]$state.last_run
+        $months  = ($now.Year - $last.Year) * 12 + $now.Month - $last.Month + ($now.Day - $last.Day) / 30.0
+        if ($months -lt $IntervalMonths) {
+            Write-Log ("Last check-in {0:F1} months ago — not due yet. Exiting." -f $months)
+            return $false
+        }
+    }
+
+    if ($state.cancelled_at) {
+        $cancelled = [datetime]$state.cancelled_at
+        $diffH     = ($now - $cancelled).TotalHours
+        if ($diffH -lt $CancelRetryHours) {
+            Write-Log ("Cancelled {0:F1} h ago — retry window not reached. Exiting." -f $diffH)
+            return $false
+        }
+    }
+    return $true
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  EMAIL
+# ════════════════════════════════════════════════════════════════════════════════
+function Send-InventoryEmail {
+    param([string]$Subject, [string]$Body, [string]$ExtraTo = "")
+    $recipients = @($AdminEmail)
+    if ($ExtraTo -and $ExtraTo -ne $AdminEmail) { $recipients += $ExtraTo }
+    try {
+        $msg = New-Object System.Net.Mail.MailMessage
+        $msg.From = $SmtpUser
+        foreach ($r in $recipients) { $msg.To.Add($r) }
+        $msg.Subject = $Subject
+        $msg.Body    = $Body
+
+        $smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $SmtpPort)
+        $smtp.EnableSsl   = $true
+        $smtp.Credentials = New-Object System.Net.NetworkCredential($SmtpUser, $SmtpPass)
+        $smtp.Send($msg)
+        Write-Log "Email sent → $($recipients -join ', ')"
+    } catch {
+        Write-Log "Email failed: $_" "ERROR"
+    }
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  HARDWARE COLLECTION
+# ════════════════════════════════════════════════════════════════════════════════
+function Get-Hardware {
+    $hw = @{}
+    try {
+        $cs   = Get-CimInstance Win32_ComputerSystem  -ErrorAction Stop
+        $bios = Get-CimInstance Win32_BIOS            -ErrorAction Stop
+        $cpu  = Get-CimInstance Win32_Processor       -ErrorAction Stop | Select-Object -First 1
+        $disk = Get-CimInstance Win32_DiskDrive       -ErrorAction Stop | Select-Object -First 1
+        $os   = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $net  = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True" |
+                Select-Object -First 1
+
+        $hw.brand   = ($cs.Manufacturer -replace '\s+',' ').Trim()
+        $hw.model   = ($cs.Model        -replace '\s+',' ').Trim()
+        $hw.serial_number = $bios.SerialNumber.Trim()
+        $hw.cpu     = ($cpu.Name        -replace '\s+',' ').Trim()
+        $ram_gb     = [math]::Round($cs.TotalPhysicalMemory / 1GB)
+        $hw.ram     = "$ram_gb GB"
+        $disk_gb    = if ($disk.Size) { [math]::Round($disk.Size / 1GB) } else { "?" }
+        $hw.storage = "$disk_gb GB  ($($disk.Model))"
+        $hw.os      = "$($os.Caption) $($os.Version)"
+        $hw.hostname   = $env:COMPUTERNAME
+        $hw.ip_address = if ($net.IPAddress) { $net.IPAddress[0] } else { "N/A" }
+        $hw.timestamp  = (Get-Date -Format "yyyy-MM-ddTHH:mm:ss")
+    } catch {
+        Write-Log "Hardware collection error: $_" "ERROR"
+        $hw.brand = $hw.model = $hw.serial_number = $hw.cpu = $hw.ram = $hw.storage = "N/A"
+        $hw.os = [System.Environment]::OSVersion.VersionString
+        $hw.hostname = $env:COMPUTERNAME
+        $hw.ip_address = "N/A"
+        $hw.timestamp  = (Get-Date -Format "yyyy-MM-ddTHH:mm:ss")
+    }
+    return $hw
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  GOOGLE SHEETS — via Apps Script webhook (no service account needed)
+# ════════════════════════════════════════════════════════════════════════════════
+function Submit-ToSheets {
+    param([hashtable]$Payload)
+    try {
+        $body = $Payload | ConvertTo-Json -Compress
+        $resp = Invoke-RestMethod -Uri $AppsScriptUrl -Method POST -Body $body `
+                    -ContentType "application/json" -TimeoutSec 15
+        return ($resp.status -eq "ok")
+    } catch {
+        Write-Log "HTTP submit failed: $_" "WARN"
+        return $false
+    }
+}
+
+# ── Offline queue ─────────────────────────────────────────────────────────────
+function Add-ToQueue($Payload) {
+    $items = @()
+    if (Test-Path $QueueFile) {
+        try { $items = Get-Content $QueueFile -Raw | ConvertFrom-Json }
+        catch {}
+    }
+    $items += $Payload
+    $items | ConvertTo-Json -Depth 5 | Set-Content $QueueFile -Encoding UTF8
+    Write-Log "Saved to offline queue (total: $($items.Count))"
+}
+
+function Flush-Queue {
+    if (-not (Test-Path $QueueFile)) { return }
+    try {
+        $items = @(Get-Content $QueueFile -Raw | ConvertFrom-Json)
+    } catch { return }
+    if ($items.Count -eq 0) { return }
+
+    Write-Log "Flushing $($items.Count) queued submission(s)…"
+    $pending = @()
+    foreach ($item in $items) {
+        $tbl = @{}
+        $item.PSObject.Properties | ForEach-Object { $tbl[$_.Name] = $_.Value }
+        if (Submit-ToSheets $tbl) {
+            Write-Log "  Flushed: $($item.timestamp)"
+        } else {
+            $pending += $item
+        }
+    }
+    if ($pending.Count -gt 0) {
+        $pending | ConvertTo-Json -Depth 5 | Set-Content $QueueFile -Encoding UTF8
+        Write-Log "  $($pending.Count) entries still pending."
+    } else {
+        Remove-Item $QueueFile -Force
+        Write-Log "  Queue fully flushed."
+    }
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  WINFORMS GUI
+# ════════════════════════════════════════════════════════════════════════════════
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+function Show-InventoryForm {
+    param([hashtable]$HW)
+
+    $result = @{ submitted = $false; user_data = @{} }
+
+    # ── Form ──────────────────────────────────────────────────────────────────
+    $form                  = New-Object System.Windows.Forms.Form
+    $form.Text             = "Webiz Inventory Agent"
+    $form.ClientSize       = New-Object System.Drawing.Size(520, 600)
+    $form.StartPosition    = "CenterScreen"
+    $form.FormBorderStyle  = "FixedDialog"
+    $form.MaximizeBox      = $false
+    $form.BackColor        = [System.Drawing.Color]::FromArgb(245, 247, 250)
+    $form.Font             = New-Object System.Drawing.Font("Segoe UI", 10)
+
+    # ── Header bar ────────────────────────────────────────────────────────────
+    $hdr           = New-Object System.Windows.Forms.Panel
+    $hdr.Location  = New-Object System.Drawing.Point(0, 0)
+    $hdr.Size      = New-Object System.Drawing.Size(520, 80)
+    $hdr.BackColor = [System.Drawing.Color]::FromArgb(26, 43, 90)
+
+    $logoLbl           = New-Object System.Windows.Forms.Label
+    $logoLbl.Text      = "WEBIZ"
+    $logoLbl.Font      = New-Object System.Drawing.Font("Segoe UI", 28, [System.Drawing.FontStyle]::Bold)
+    $logoLbl.ForeColor = [System.Drawing.Color]::White
+    $logoLbl.Location  = New-Object System.Drawing.Point(22, 14)
+    $logoLbl.AutoSize  = $true
+    $hdr.Controls.Add($logoLbl)
+
+    # Logo image override (place webiz_logo.png next to this script)
+    $logoFile = Join-Path (Split-Path $PSCommandPath) "webiz_logo.png"
+    if (Test-Path $logoFile) {
+        try {
+            $img           = [System.Drawing.Image]::FromFile($logoFile)
+            $pb            = New-Object System.Windows.Forms.PictureBox
+            $pb.Image      = $img
+            $pb.SizeMode   = "Zoom"
+            $pb.Location   = New-Object System.Drawing.Point(16, 10)
+            $pb.Size       = New-Object System.Drawing.Size(160, 60)
+            $pb.BackColor  = [System.Drawing.Color]::FromArgb(26, 43, 90)
+            $hdr.Controls.Remove($logoLbl)
+            $hdr.Controls.Add($pb)
+        } catch {}
+    }
+
+    $form.Controls.Add($hdr)
+
+    # ── Red accent line ───────────────────────────────────────────────────────
+    $accent           = New-Object System.Windows.Forms.Panel
+    $accent.Location  = New-Object System.Drawing.Point(0, 80)
+    $accent.Size      = New-Object System.Drawing.Size(520, 4)
+    $accent.BackColor = [System.Drawing.Color]::FromArgb(232, 48, 58)
+    $form.Controls.Add($accent)
+
+    # ── Welcome text ──────────────────────────────────────────────────────────
+    $welcome           = New-Object System.Windows.Forms.Label
+    $welcome.Text      = "Hello, I am Inventory Agent of Webiz and I need following information"
+    $welcome.Location  = New-Object System.Drawing.Point(26, 96)
+    $welcome.Size      = New-Object System.Drawing.Size(468, 40)
+    $welcome.Font      = New-Object System.Drawing.Font("Segoe UI", 11)
+    $form.Controls.Add($welcome)
+
+    # ── Helper: add a label+textbox row ───────────────────────────────────────
+    $yPos = 148
+    function Add-Row {
+        param([string]$LabelText, [bool]$IsLast = $false)
+        $lbl          = New-Object System.Windows.Forms.Label
+        $lbl.Text     = $LabelText
+        $lbl.Location = New-Object System.Drawing.Point(26, ($script:yPos + 2))
+        $lbl.Size     = New-Object System.Drawing.Size(120, 22)
+        $lbl.Font     = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+        $form.Controls.Add($lbl)
+
+        $tb            = New-Object System.Windows.Forms.TextBox
+        $tb.Location   = New-Object System.Drawing.Point(152, $script:yPos)
+        $tb.Size       = New-Object System.Drawing.Size(342, 26)
+        $tb.Font       = New-Object System.Drawing.Font("Segoe UI", 10)
+        $form.Controls.Add($tb)
+
+        $script:yPos += 40
+        return $tb
+    }
+
+    $tbFirst = Add-Row "First Name *"
+    $tbLast  = Add-Row "Last Name *"
+    $tbEmail = Add-Row "Email *"
+
+    # Project dropdown
+    $lblProj          = New-Object System.Windows.Forms.Label
+    $lblProj.Text     = "Project *"
+    $lblProj.Location = New-Object System.Drawing.Point(26, ($yPos + 2))
+    $lblProj.Size     = New-Object System.Drawing.Size(120, 22)
+    $lblProj.Font     = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $form.Controls.Add($lblProj)
+
+    $cbProject             = New-Object System.Windows.Forms.ComboBox
+    $cbProject.Location    = New-Object System.Drawing.Point(152, $yPos)
+    $cbProject.Size        = New-Object System.Drawing.Size(342, 26)
+    $cbProject.Font        = New-Object System.Drawing.Font("Segoe UI", 10)
+    $cbProject.DropDownStyle = "DropDownList"
+    $Projects | ForEach-Object { $cbProject.Items.Add($_) | Out-Null }
+    $cbProject.SelectedIndex = 0
+    $form.Controls.Add($cbProject)
+    $yPos += 40
+
+    # ── Separator ─────────────────────────────────────────────────────────────
+    $sep           = New-Object System.Windows.Forms.Panel
+    $sep.Location  = New-Object System.Drawing.Point(26, ($yPos + 12))
+    $sep.Size      = New-Object System.Drawing.Size(468, 1)
+    $sep.BackColor = [System.Drawing.Color]::FromArgb(208, 213, 221)
+    $form.Controls.Add($sep)
+    $yPos += 24
+
+    # ── Device info preview ───────────────────────────────────────────────────
+    $lblHint          = New-Object System.Windows.Forms.Label
+    $lblHint.Text     = "Device information that will be recorded:"
+    $lblHint.Location = New-Object System.Drawing.Point(26, $yPos)
+    $lblHint.Size     = New-Object System.Drawing.Size(468, 18)
+    $lblHint.Font     = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Italic)
+    $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
+    $form.Controls.Add($lblHint)
+    $yPos += 22
+
+    $preview = "  $($HW.brand) $($HW.model)  •  SN: $($HW.serial_number)  •  $($HW.os)`n" +
+               "  CPU: $($HW.cpu)  •  RAM: $($HW.ram)  •  Storage: $($HW.storage)`n" +
+               "  Host: $($HW.hostname)  •  IP: $($HW.ip_address)"
+    $lblHW          = New-Object System.Windows.Forms.Label
+    $lblHW.Text     = $preview
+    $lblHW.Location = New-Object System.Drawing.Point(26, $yPos)
+    $lblHW.Size     = New-Object System.Drawing.Size(468, 56)
+    $lblHW.Font     = New-Object System.Drawing.Font("Segoe UI", 8.5)
+    $form.Controls.Add($lblHW)
+
+    # ── Buttons ───────────────────────────────────────────────────────────────
+    $btnSubmit             = New-Object System.Windows.Forms.Button
+    $btnSubmit.Text        = "Submit"
+    $btnSubmit.Location    = New-Object System.Drawing.Point(330, 555)
+    $btnSubmit.Size        = New-Object System.Drawing.Size(90, 32)
+    $btnSubmit.Font        = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $btnSubmit.BackColor   = [System.Drawing.Color]::FromArgb(232, 48, 58)
+    $btnSubmit.ForeColor   = [System.Drawing.Color]::White
+    $btnSubmit.FlatStyle   = "Flat"
+    $btnSubmit.FlatAppearance.BorderSize = 0
+    $form.Controls.Add($btnSubmit)
+
+    $btnCancel             = New-Object System.Windows.Forms.Button
+    $btnCancel.Text        = "Cancel"
+    $btnCancel.Location    = New-Object System.Drawing.Point(430, 555)
+    $btnCancel.Size        = New-Object System.Drawing.Size(76, 32)
+    $btnCancel.Font        = New-Object System.Drawing.Font("Segoe UI", 10)
+    $btnCancel.BackColor   = [System.Drawing.Color]::FromArgb(229, 231, 235)
+    $btnCancel.FlatStyle   = "Flat"
+    $btnCancel.FlatAppearance.BorderSize = 0
+    $form.Controls.Add($btnCancel)
+
+    # ── Event handlers ────────────────────────────────────────────────────────
+    $btnSubmit.Add_Click({
+        if (-not $tbFirst.Text.Trim()) {
+            [System.Windows.Forms.MessageBox]::Show("Please enter your First Name.", "Missing field") | Out-Null; return
+        }
+        if (-not $tbLast.Text.Trim()) {
+            [System.Windows.Forms.MessageBox]::Show("Please enter your Last Name.", "Missing field") | Out-Null; return
+        }
+        if ($tbEmail.Text -notmatch '^[^@]+@[^@]+\.[^@]+$') {
+            [System.Windows.Forms.MessageBox]::Show("Please enter a valid email address.", "Invalid email") | Out-Null; return
+        }
+        $result.submitted = $true
+        $result.user_data  = @{
+            first_name = $tbFirst.Text.Trim()
+            last_name  = $tbLast.Text.Trim()
+            email      = $tbEmail.Text.Trim()
+            project    = $cbProject.SelectedItem.ToString()
+        }
+        $form.Close()
+    })
+
+    $btnCancel.Add_Click({
+        $ans = [System.Windows.Forms.MessageBox]::Show(
+            "Are you sure you want to skip?`n`n• IT will be notified`n• You'll be reminded again in 24 hours",
+            "Cancel check-in",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        if ($ans -eq "Yes") { $result.submitted = $false; $form.Close() }
+    })
+
+    $form.ShowDialog() | Out-Null
+    return $result
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  TASK SCHEDULER REGISTRATION (runs on first install)
+# ════════════════════════════════════════════════════════════════════════════════
+function Register-StartupTask {
+    # Copy script to a stable path so the task still works if the original is deleted
+    Copy-Item -Path $PSCommandPath -Destination $ScriptDest -Force
+
+    $action   = New-ScheduledTaskAction `
+        -Execute  "powershell.exe" `
+        -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$ScriptDest`""
+
+    $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $trigger.Delay = "PT90S"    # 90-second delay so desktop is ready
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -ExecutionTimeLimit         (New-TimeSpan -Hours 1) `
+        -DisallowStartIfOnBatteries $false `
+        -StopIfGoingOnBatteries     $false `
+        -MultipleInstances          IgnoreNew
+
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId   "$env:USERDOMAIN\$env:USERNAME" `
+        -LogonType Interactive `
+        -RunLevel Highest
+
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+        -Settings $settings -Principal $principal `
+        -Description "Webiz Inventory Agent — checks in every 6 months" | Out-Null
+
+    Write-Log "Task Scheduler task '$TaskName' registered."
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  SELF-SIGNING (runs once on first install if running as admin)
+# ════════════════════════════════════════════════════════════════════════════════
+function Invoke-SelfSign {
+    try {
+        # Check if already signed
+        $sig = Get-AuthenticodeSignature $ScriptDest -ErrorAction SilentlyContinue
+        if ($sig -and $sig.Status -eq "Valid") { return }
+
+        # Create a self-signed code-signing certificate in the user store
+        $cert = New-SelfSignedCertificate `
+            -Subject          "CN=WebizInventory,O=Webiz,C=GE" `
+            -Type             CodeSigningCert `
+            -KeyUsage         DigitalSignature `
+            -NotAfter         (Get-Date).AddYears(10) `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -ErrorAction Stop
+
+        # Trust it locally for code signing
+        $cer = "$env:TEMP\webiz_codesign.cer"
+        $cert | Export-Certificate -FilePath $cer -Type CERT | Out-Null
+        Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\Root"        | Out-Null
+        Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" | Out-Null
+        Remove-Item $cer -Force
+
+        Set-AuthenticodeSignature -FilePath $ScriptDest -Certificate $cert | Out-Null
+        Write-Log "Script self-signed with certificate: $($cert.Thumbprint)"
+    } catch {
+        Write-Log "Self-signing skipped: $_" "WARN"
+    }
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ════════════════════════════════════════════════════════════════════════════════
+Write-Log "=== Webiz Inventory Agent started ==="
+
+# Register startup task if not already registered
+$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if (-not $task) {
+    Write-Log "First run — registering startup task and self-signing…"
+    Register-StartupTask
+    Invoke-SelfSign
+}
+
+# Self-update check
+Invoke-SelfUpdate
+
+# Flush offline queue
+Flush-Queue
+
+# Guard: exit if not due
+if (-not (Test-ShouldRun)) { exit 0 }
+
+# Collect hardware
+Write-Log "Collecting hardware information…"
+$hw = Get-Hardware
+Write-Log "HW: $($hw | ConvertTo-Json -Compress)"
+
+# Show GUI
+$res = Show-InventoryForm -HW $hw
+
+# ── Cancelled ─────────────────────────────────────────────────────────────────
+if (-not $res.submitted) {
+    $state = Get-State
+    $state | Add-Member -NotePropertyName cancelled_at -NotePropertyValue (Get-Date -Format "o") -Force
+    Save-State $state
+
+    $body = "The inventory form was CANCELLED by the user.`n`n" +
+            "Device    : $($hw.brand) $($hw.model)`n" +
+            "Serial    : $($hw.serial_number)`n" +
+            "Hostname  : $($hw.hostname)`n" +
+            "IP        : $($hw.ip_address)`n" +
+            "OS        : $($hw.os)`n" +
+            "Time      : $(Get-Date -Format 'o')`n`n" +
+            "The agent will prompt again in $CancelRetryHours hours."
+
+    Send-InventoryEmail `
+        -Subject "[Webiz Inventory] CANCELLED – SN: $($hw.serial_number) / $($hw.hostname)" `
+        -Body $body
+    Write-Log "Form cancelled. Will retry in $CancelRetryHours h."
+    exit 0
+}
+
+# ── Submitted ─────────────────────────────────────────────────────────────────
+$ud = $res.user_data
+$payload = @{
+    timestamp     = $hw.timestamp
+    first_name    = $ud.first_name
+    last_name     = $ud.last_name
+    email         = $ud.email
+    project       = $ud.project
+    hostname      = $hw.hostname
+    ip_address    = $hw.ip_address
+    brand         = $hw.brand
+    model         = $hw.model
+    serial_number = $hw.serial_number
+    cpu           = $hw.cpu
+    ram           = $hw.ram
+    storage       = $hw.storage
+    os            = $hw.os
+}
+
+Write-Log "Submitting to Google Sheets…"
+$immediate = Submit-ToSheets -Payload $payload
+if (-not $immediate) {
+    Add-ToQueue $payload
+    Send-InventoryEmail `
+        -Subject "[Webiz Inventory] Queued (offline) – $($hw.hostname)" `
+        -Body    "Device was offline. Data saved locally and will sync on next login.`n`n$(($payload | ConvertTo-Json))"
+}
+
+# Update state
+$state = Get-State
+$state | Add-Member -NotePropertyName last_run     -NotePropertyValue (Get-Date -Format "o") -Force
+$state | Add-Member -NotePropertyName cancelled_at -NotePropertyValue $null                  -Force
+Save-State $state
+
+# Confirmation email
+$fullName  = "$($ud.first_name) $($ud.last_name)"
+$statusLine = if ($immediate) { "✔  Data submitted to the inventory sheet." } `
+              else             { "⚠  Device was offline — data will sync on next login." }
+$body = "Hi $($ud.first_name),`n`n" +
+        "Your device has been successfully registered in the Webiz Inventory.`n`n" +
+        "$('─'*44)`n" +
+        "Name      : $fullName`n" +
+        "Email     : $($ud.email)`n" +
+        "Project   : $($ud.project)`n" +
+        "$('─'*44)`n" +
+        "Device    : $($hw.brand) $($hw.model)`n" +
+        "Serial    : $($hw.serial_number)`n" +
+        "CPU       : $($hw.cpu)`n" +
+        "RAM       : $($hw.ram)`n" +
+        "Storage   : $($hw.storage)`n" +
+        "OS        : $($hw.os)`n" +
+        "Hostname  : $($hw.hostname)`n" +
+        "IP        : $($hw.ip_address)`n" +
+        "Timestamp : $($hw.timestamp)`n`n" +
+        "$statusLine"
+
+Send-InventoryEmail `
+    -Subject "[Webiz Inventory] ✔ Check-in complete – $fullName / $($hw.hostname)" `
+    -Body    $body `
+    -ExtraTo $ud.email
+
+# Success dialog
+$dialogMsg = "Thank you, $($ud.first_name)!`n`nYour device has been registered."
+if (-not $immediate) { $dialogMsg += "`n`n(Offline — data will sync automatically.)" }
+[System.Windows.Forms.MessageBox]::Show($dialogMsg, "Webiz Inventory – Done",
+    [System.Windows.Forms.MessageBoxButtons]::OK,
+    [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+
+Write-Log "=== Completed successfully ==="

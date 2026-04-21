@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x \"/Users/nika.nikoladze/Projects/Inventory Check-in Script/install_macos.sh\" \"/Users/nika.nikoladze/Projects/Inventory Check-in Script/install_linux.sh\")"
+    ]
+  }
+}
