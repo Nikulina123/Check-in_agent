@@ -14,14 +14,18 @@
  *  6. To update: make changes → Deploy → Manage deployments → edit existing → New version
  */
 
-const SHEET_NAME = "Inventory";
-const HEADERS    = [
+// ── Sheet names ───────────────────────────────────────────────────────────────
+const SHEET_NAME     = "Inventory";
+const CHANGELOG_NAME = "Change Log";
+
+// ── Inventory columns ─────────────────────────────────────────────────────────
+const HEADERS = [
   "Timestamp", "First Name", "Last Name", "Email", "Project",
   "Hostname", "IP Address", "Brand", "Model", "Serial Number",
   "CPU", "RAM", "Storage", "OS"
 ];
 
-// Column indices (0-based) used for look-up and comparison
+// 0-based column indices for Inventory
 const COL = {
   TIMESTAMP:     0,
   FIRST_NAME:    1,
@@ -39,127 +43,144 @@ const COL = {
   OS:            13,
 };
 
+// ── Change Log columns ────────────────────────────────────────────────────────
+const CHANGELOG_HEADERS = ["Timestamp", "Serial Number", "Hostname", "Comment"];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 /**
- * Returns the current timestamp formatted in Tbilisi time (UTC+4).
+ * Current timestamp in Tbilisi time (UTC+4).
  * Example: "2026-04-21T14:30:00+04:00"
  */
 function getTbilisiTimestamp() {
-  const now    = new Date();
-  const offset = 4 * 60 * 60 * 1000; // UTC+4 in ms
-  const local  = new Date(now.getTime() + offset);
-  // toISOString gives UTC — replace Z with +04:00 after shifting the time
+  const now   = new Date();
+  const local = new Date(now.getTime() + 4 * 60 * 60 * 1000);
   return local.toISOString().replace(/\.\d{3}Z$/, "+04:00");
 }
 
 /**
- * Returns the most recent row (as a 0-based array) for the same device,
- * excluding the row we just appended.
+ * Ensures a sheet exists with the given headers and styling, returns it.
+ */
+function getOrCreateSheet(ss, name, headers, headerBg) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(headers);
+    const hdr = sheet.getRange(1, 1, 1, headers.length);
+    hdr.setFontWeight("bold")
+       .setBackground(headerBg || "#1A2B5A")
+       .setFontColor("#FFFFFF")
+       .setHorizontalAlignment("center");
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/**
+ * Finds the existing Inventory row for a device.
+ * Returns { rowNum, values } (1-based sheet row) or null if not found.
  *
  * Match priority:
- *   1. Serial Number (most reliable device identifier)
- *   2. Hostname (fallback when serial is absent)
+ *   1. Serial Number  (most reliable)
+ *   2. Hostname       (fallback when serial is absent)
  *
- * NOTE: a different First Name / Last Name / Email / Project on the same
- * device is intentionally NOT part of the look-up key — it is compared
- * afterwards to detect an ownership change.
+ * First Name / Last Name / Email / Project are NOT part of the lookup key —
+ * they are compared afterwards to detect ownership changes.
  */
-function findPreviousEntry(sheet, serialNumber, hostname, currentLastRow) {
-  const searchRows = currentLastRow - 2; // rows between header row and the new row
-  if (searchRows <= 0) return null;
+function findExistingRow(sheet, serialNumber, hostname) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return null; // only header or empty
 
-  const data = sheet.getRange(2, 1, searchRows, HEADERS.length).getValues();
+  const data = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
 
-  // Walk backwards — most-recent previous entry wins
   for (let i = data.length - 1; i >= 0; i--) {
     const sn   = String(data[i][COL.SERIAL_NUMBER]).trim();
     const host = String(data[i][COL.HOSTNAME]).trim();
 
-    // Serial number match takes priority
-    if (serialNumber && sn && sn === serialNumber) return data[i];
-    // Hostname fallback (only when serial is missing on either side)
-    if (!serialNumber && hostname && host === hostname) return data[i];
+    if (serialNumber && sn && sn === serialNumber) {
+      return { rowNum: i + 2, values: data[i] }; // +2: 1-based + header offset
+    }
+    if (!serialNumber && hostname && host === hostname) {
+      return { rowNum: i + 2, values: data[i] };
+    }
   }
   return null;
 }
 
+/**
+ * Appends one row to the Change Log sheet.
+ */
+function appendChangeLog(ss, serialNumber, hostname, comment) {
+  const sheet = getOrCreateSheet(ss, CHANGELOG_NAME, CHANGELOG_HEADERS, "#2E4057");
+  sheet.appendRow([getTbilisiTimestamp(), serialNumber, hostname, comment]);
+  sheet.autoResizeColumns(1, CHANGELOG_HEADERS.length);
+}
+
+// ── Web App entry point ───────────────────────────────────────────────────────
+
 function doPost(e) {
   try {
-    const data  = JSON.parse(e.postData.contents);
-    const ss    = SpreadsheetApp.getActiveSpreadsheet();
-    let   sheet = ss.getSheetByName(SHEET_NAME);
+    const data = JSON.parse(e.postData.contents);
+    const ss   = SpreadsheetApp.getActiveSpreadsheet();
 
-    if (!sheet) {
-      sheet = ss.insertSheet(SHEET_NAME);
-    }
+    const invSheet = getOrCreateSheet(ss, SHEET_NAME, HEADERS, "#1A2B5A");
 
-    // Create header row if sheet is empty
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow(HEADERS);
-      const hdr = sheet.getRange(1, 1, 1, HEADERS.length);
-      hdr.setFontWeight("bold")
-         .setBackground("#1A2B5A")
-         .setFontColor("#FFFFFF")
-         .setHorizontalAlignment("center");
-      sheet.setFrozenRows(1);
-    }
+    const sn       = String(data.serial_number || "").trim();
+    const hostname = String(data.hostname      || "").trim();
+    const now      = getTbilisiTimestamp();
 
     const newRowValues = [
-      data.timestamp    || getTbilisiTimestamp(),
-      data.first_name   || "",
-      data.last_name    || "",
-      data.email        || "",
-      data.project      || "",
-      data.hostname     || "",
-      data.ip_address   || "",
-      data.brand        || "",
-      data.model        || "",
-      data.serial_number|| "",
-      data.cpu          || "",
-      data.ram          || "",
-      data.storage      || "",
-      data.os           || "",
+      data.timestamp     || now,
+      data.first_name    || "",
+      data.last_name     || "",
+      data.email         || "",
+      data.project       || "",
+      hostname,
+      data.ip_address    || "",
+      data.brand         || "",
+      data.model         || "",
+      sn,
+      data.cpu           || "",
+      data.ram           || "",
+      data.storage       || "",
+      data.os            || "",
     ];
 
-    sheet.appendRow(newRowValues);
-    const newRowNum = sheet.getLastRow(); // 1-based sheet row of the row we just added
+    const existing = findExistingRow(invSheet, sn, hostname);
 
-    // ── Change-detection note ────────────────────────────────────────────────
-    const prevEntry = findPreviousEntry(
-      sheet,
-      String(data.serial_number || "").trim(),
-      String(data.hostname      || "").trim(),
-      newRowNum
-    );
+    if (!existing) {
+      // ── New device: add a full row, no Change Log entry ──────────────────
+      invSheet.appendRow(newRowValues);
+      invSheet.autoResizeColumns(1, HEADERS.length);
 
-    let noteText;
-    if (!prevEntry) {
-      // No history for this device — first ever check-in, no note needed
-      noteText = null;
     } else {
-      // Compare every field except Timestamp (index 0)
-      const fieldsToCompare = HEADERS.slice(1); // "First Name" … "OS"
-      const allMatch = fieldsToCompare.every((_, i) => {
-        const col = i + 1; // skip Timestamp
-        return String(newRowValues[col]).trim() === String(prevEntry[col]).trim();
+      // ── Known device: compare all fields except Timestamp ────────────────
+      const allMatch = HEADERS.slice(1).every((_, i) => {
+        const col = i + 1; // skip Timestamp (index 0)
+        return String(newRowValues[col]).trim() === String(existing.values[col]).trim();
       });
 
-      const noteTime = getTbilisiTimestamp();
       if (allMatch) {
-        noteText = `Collected nothing changed\n${noteTime}`;
+        // Nothing changed — skip Inventory update, log to Change Log only
+        appendChangeLog(ss, sn, hostname,
+          `Collected nothing changed – ${now}`);
+
       } else {
-        const prevFirst = String(prevEntry[COL.FIRST_NAME]).trim();
-        const prevLast  = String(prevEntry[COL.LAST_NAME]).trim();
-        noteText = `Previous Checkin device owner was: ${prevFirst} ${prevLast}\n${noteTime}`;
+        // Data changed — update the existing Inventory row with fresh values
+        newRowValues[COL.TIMESTAMP] = now; // refresh timestamp on update
+        invSheet.getRange(existing.rowNum, 1, 1, HEADERS.length)
+                .setValues([newRowValues]);
+        invSheet.autoResizeColumns(1, HEADERS.length);
+
+        // Log previous owner to Change Log
+        const prevFirst = String(existing.values[COL.FIRST_NAME]).trim();
+        const prevLast  = String(existing.values[COL.LAST_NAME]).trim();
+        appendChangeLog(ss, sn, hostname,
+          `Previous Checkin device owner was: ${prevFirst} ${prevLast} – ${now}`);
       }
     }
-
-    if (noteText) {
-      // Attach note to the Timestamp cell of the new row
-      sheet.getRange(newRowNum, 1).setNote(noteText);
-    }
-
-    // Auto-resize columns for readability
-    sheet.autoResizeColumns(1, HEADERS.length);
 
     return ContentService
       .createTextOutput(JSON.stringify({ status: "ok" }))
