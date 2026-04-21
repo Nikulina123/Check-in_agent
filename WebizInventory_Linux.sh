@@ -10,10 +10,23 @@
 
 # ─── CONFIGURATION — edit these two lines before distributing ────────────────
 APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycbxUVGyr5SuH7gjEc7zS5CcZkDV03qVGw7JbPHwvTFwLEUImY3xbRE8V8D4SQNalBMUdGw/exec"          # ← FILL IN
-GITHUB_RAW_URL="https://raw.githubusercontent.com/YOUR_ORG/webiz-inventory/main/inventory_agent.py"  # ← FILL IN
+GITHUB_RAW_URL="https://raw.githubusercontent.com/Nikulina123/Check-in_agent/main/inventory_agent.py"
 # ─────────────────────────────────────────────────────────────────────────────
 
-set -euo pipefail
+set -uo pipefail   # -e removed so we can show real errors before exiting
+
+# ── Error trap: show what failed and keep terminal open ──────────────────────
+_die() {
+    local line="$1"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║  ✗  Installation failed (line $line)                    "
+    echo "║     Check the error above, fix it, and re-run.          ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo ""
+    exit 1
+}
+trap '_die $LINENO' ERR
 
 AGENT_DIR="$HOME/.webiz_inventory"
 AGENT_FILE="$AGENT_DIR/inventory_agent.py"
@@ -127,7 +140,7 @@ Wants=graphical-session.target
 [Service]
 Type=oneshot
 # 90-second delay so the desktop session is fully ready
-ExecStartPre=/bin/sleep 90
+ExecStartPre=-/usr/bin/env sleep 90
 ExecStart=${PYTHON3} ${AGENT_FILE}
 WorkingDirectory=${AGENT_DIR}
 Environment=DISPLAY=:0

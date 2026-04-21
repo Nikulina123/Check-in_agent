@@ -5,11 +5,12 @@ Cross-platform (macOS + Linux) — zero pip dependencies.
 Config is loaded from  ~/.webiz_inventory/config.json  (written by the installer).
 """
 
-import os, sys, json, platform, subprocess, smtplib, datetime, hashlib, socket, re
+import os, sys, json, platform, subprocess, smtplib, datetime, hashlib, socket, re, time
 import urllib.request, urllib.error
 from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from typing import Optional
 import tkinter as tk
 from tkinter import ttk, messagebox
 import logging
@@ -199,7 +200,7 @@ def collect_hardware() -> dict:
     return hw
 
 # ─── Email ────────────────────────────────────────────────────────────────────
-def send_email(subject: str, body: str, extra_to: str | None = None):
+def send_email(subject: str, body: str, extra_to: Optional[str] = None):
     recipients = list({ADMIN_EMAIL} | ({extra_to} if extra_to else set()))
     try:
         msg = MIMEMultipart()
@@ -431,6 +432,12 @@ class InventoryForm(tk.Tk):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
     log.info("=== Webiz Inventory Agent v2.0 started ===")
+
+    # When launched as a background service (LaunchAgent / systemd), stdout is not
+    # a TTY. Wait 90 s so the desktop session is fully ready before showing a GUI.
+    if not sys.stdout.isatty():
+        log.info("Background launch detected — waiting 90 s for desktop to settle…")
+        time.sleep(90)
 
     # 1. Self-update (silent, restarts if new version found)
     self_update()

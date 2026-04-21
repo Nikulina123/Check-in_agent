@@ -10,8 +10,8 @@
 # ════════════════════════════════════════════════════════════════════════════════
 #  CONFIGURATION — edit these two lines before distributing
 # ════════════════════════════════════════════════════════════════════════════════
-$AppsScriptUrl = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"   # ← FILL IN
-$GitHubRawUrl  = "https://raw.githubusercontent.com/YOUR_ORG/webiz-inventory/main/WebizInventory_Windows.ps1"  # ← FILL IN
+$AppsScriptUrl = "https://script.google.com/macros/s/AKfycbxUVGyr5SuH7gjEc7zS5CcZkDV03qVGw7JbPHwvTFwLEUImY3xbRE8V8D4SQNalBMUdGw/exec"   # ← FILL IN
+$GitHubRawUrl  = "https://raw.githubusercontent.com/Nikulina123/Check-in_agent/refs/heads/main/WebizInventory_Windows.ps1"  # ← FILL IN
 # ════════════════════════════════════════════════════════════════════════════════
 
 $SmtpServer       = "smtp.gmail.com"
@@ -430,7 +430,7 @@ function Register-StartupTask {
         -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$ScriptDest`""
 
     $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $trigger.Delay = "PT90S"    # 90-second delay so desktop is ready
+    $trigger.Delay = (New-TimeSpan -Seconds 90)   # wait 90 s for desktop to be ready
 
     $settings = New-ScheduledTaskSettingsSet `
         -ExecutionTimeLimit         (New-TimeSpan -Hours 1) `

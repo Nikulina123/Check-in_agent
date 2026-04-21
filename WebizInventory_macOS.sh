@@ -7,11 +7,25 @@
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ─── CONFIGURATION — edit these two lines before distributing ────────────────
-APPS_SCRIPT_URL="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"          # ← FILL IN
-GITHUB_RAW_URL="https://raw.githubusercontent.com/YOUR_ORG/webiz-inventory/main/inventory_agent.py"  # ← FILL IN
+APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycbxUVGyr5SuH7gjEc7zS5CcZkDV03qVGw7JbPHwvTFwLEUImY3xbRE8V8D4SQNalBMUdGw/exec"          # ← FILL IN
+GITHUB_RAW_URL="https://raw.githubusercontent.com/Nikulina123/Check-in_agent/main/inventory_agent.py"
 # ─────────────────────────────────────────────────────────────────────────────
 
-set -euo pipefail
+set -uo pipefail   # note: -e removed so we can show real errors before exiting
+
+# ── Error trap: show what failed and keep window open ────────────────────────
+_die() {
+    local line="$1"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║  ✗  Installation failed (line $line)                    "
+    echo "║     Check the error above, fix it, and re-run.          ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo ""
+    read -rp "Press Enter to close…" _
+    exit 1
+}
+trap '_die $LINENO' ERR
 
 AGENT_DIR="$HOME/Library/Application Support/WebizInventory"
 AGENT_FILE="$AGENT_DIR/inventory_agent.py"
@@ -70,22 +84,65 @@ echo "      Python + tkinter: OK"
 # ── Step 2: Download the agent ────────────────────────────────────────────────
 echo ""
 echo "[2/5] Downloading inventory agent from GitHub…"
+echo "      URL: $GITHUB_RAW_URL"
 mkdir -p "$AGENT_DIR"
 
+DOWNLOAD_OK=false
 if command -v curl &>/dev/null; then
-    curl -fsSL "$GITHUB_RAW_URL" -o "$AGENT_FILE"
-elif command -v wget &>/dev/null; then
-    wget -q "$GITHUB_RAW_URL" -O "$AGENT_FILE"
-else
-    # Fallback: use Python itself to download
+    # -f: fail on HTTP errors  -L: follow redirects  --retry 3: retry on network glitch
+    # -v removed from -s so errors print to terminal
+    if curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 \
+            "$GITHUB_RAW_URL" -o "$AGENT_FILE" 2>&1; then
+        DOWNLOAD_OK=true
+    fi
+fi
+
+if [[ "$DOWNLOAD_OK" == false ]] && command -v wget &>/dev/null; then
+    echo "      curl failed — trying wget…"
+    if wget --tries=3 --timeout=15 "$GITHUB_RAW_URL" -O "$AGENT_FILE" 2>&1; then
+        DOWNLOAD_OK=true
+    fi
+fi
+
+if [[ "$DOWNLOAD_OK" == false ]]; then
+    echo "      curl/wget failed — trying Python urllib…"
     "$PYTHON3" -c "
 import urllib.request, sys
-urllib.request.urlretrieve('$GITHUB_RAW_URL', '$AGENT_FILE')
-print('      Downloaded via Python urllib.')
-"
+try:
+    urllib.request.urlretrieve('$GITHUB_RAW_URL', '$AGENT_FILE')
+    print('      Downloaded via Python urllib.')
+except Exception as e:
+    print(f'      urllib failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" && DOWNLOAD_OK=true
 fi
+
+if [[ "$DOWNLOAD_OK" == false ]]; then
+    echo ""
+    echo "  [ERROR] Could not download inventory_agent.py."
+    echo "  Possible causes:"
+    echo "    • GitHub repo is private — make it public or check the URL"
+    echo "    • File not yet pushed to the repo"
+    echo "    • No internet connection"
+    echo "  URL tried: $GITHUB_RAW_URL"
+    exit 1
+fi
+
+# Validate: file must exist and not be empty HTML (GitHub 404 page)
+if [[ ! -s "$AGENT_FILE" ]]; then
+    echo "  [ERROR] Downloaded file is empty."
+    exit 1
+fi
+if head -1 "$AGENT_FILE" | grep -qi "<!DOCTYPE\|<html"; then
+    echo "  [ERROR] GitHub returned an HTML page instead of the Python file."
+    echo "  The URL is probably wrong or the repo/file does not exist yet:"
+    echo "  $GITHUB_RAW_URL"
+    rm -f "$AGENT_FILE"
+    exit 1
+fi
+
 chmod +x "$AGENT_FILE"
-echo "      Agent saved to: $AGENT_FILE"
+echo "      ✔  Agent saved to: $AGENT_FILE"
 
 # ── Step 3: Write config ──────────────────────────────────────────────────────
 echo ""
@@ -127,12 +184,9 @@ cat > "$PLIST_FILE" <<PLIST
     <string>${AGENT_DIR}</string>
 
     <!-- Run once at login (agent enforces the 6-month interval itself) -->
+    <!-- The Python script sleeps 90 s internally when not running in a terminal -->
     <key>RunAtLoad</key>
     <true/>
-
-    <!-- 90-second startup delay so the desktop is fully ready -->
-    <key>StartInterval</key>
-    <integer>90</integer>
 
     <key>StandardOutPath</key>
     <string>${AGENT_DIR}/launchd_stdout.log</string>
@@ -179,3 +233,4 @@ echo "   To uninstall:"
 echo "   launchctl unload ~/Library/LaunchAgents/$PLIST_LABEL.plist"
 echo "   rm ~/Library/LaunchAgents/$PLIST_LABEL.plist"
 echo ""
+read -rp "Press Enter to close…" _
