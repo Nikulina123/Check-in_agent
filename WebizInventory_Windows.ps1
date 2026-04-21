@@ -281,7 +281,7 @@ function Show-InventoryForm {
     # ── Form ──────────────────────────────────────────────────────────────────
     $form                  = New-Object System.Windows.Forms.Form
     $form.Text             = "Webiz Inventory Agent"
-    $form.ClientSize       = New-Object System.Drawing.Size(520, 660)
+    $form.ClientSize       = New-Object System.Drawing.Size(520, 640)
     $form.StartPosition    = "CenterScreen"
     $form.FormBorderStyle  = "FixedDialog"
     $form.MaximizeBox      = $false
@@ -335,48 +335,48 @@ function Show-InventoryForm {
     $welcome.Font      = New-Object System.Drawing.Font("Segoe UI", 11)
     $form.Controls.Add($welcome)
 
-    # ── Helper: add a label+textbox row ───────────────────────────────────────
+    # ── Input rows ────────────────────────────────────────────────────────────
     $yPos = 148
-    function Add-Row {
-        param([string]$LabelText, [bool]$IsLast = $false)
+
+    foreach ($row in @(
+        @{ Label = "First Name *"; Var = "tbFirst" },
+        @{ Label = "Last Name *";  Var = "tbLast"  },
+        @{ Label = "Email *";      Var = "tbEmail" }
+    )) {
         $lbl          = New-Object System.Windows.Forms.Label
-        $lbl.Text     = $LabelText
-        $lbl.Location = New-Object System.Drawing.Point(26, ($script:yPos + 2))
+        $lbl.Text     = $row.Label
+        $lbl.Location = New-Object System.Drawing.Point(26, ($yPos + 4))
         $lbl.Size     = New-Object System.Drawing.Size(120, 22)
         $lbl.Font     = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
         $form.Controls.Add($lbl)
 
-        $tb            = New-Object System.Windows.Forms.TextBox
-        $tb.Location   = New-Object System.Drawing.Point(152, $script:yPos)
-        $tb.Size       = New-Object System.Drawing.Size(342, 26)
-        $tb.Font       = New-Object System.Drawing.Font("Segoe UI", 10)
+        $tb           = New-Object System.Windows.Forms.TextBox
+        $tb.Location  = New-Object System.Drawing.Point(152, $yPos)
+        $tb.Size      = New-Object System.Drawing.Size(342, 28)
+        $tb.Font      = New-Object System.Drawing.Font("Segoe UI", 10)
         $form.Controls.Add($tb)
 
-        $script:yPos += 40
-        return $tb
+        Set-Variable -Name $row.Var -Value $tb
+        $yPos += 44
     }
-
-    $tbFirst = Add-Row "First Name *"
-    $tbLast  = Add-Row "Last Name *"
-    $tbEmail = Add-Row "Email *"
 
     # Project dropdown
     $lblProj          = New-Object System.Windows.Forms.Label
     $lblProj.Text     = "Project *"
-    $lblProj.Location = New-Object System.Drawing.Point(26, ($yPos + 2))
+    $lblProj.Location = New-Object System.Drawing.Point(26, ($yPos + 4))
     $lblProj.Size     = New-Object System.Drawing.Size(120, 22)
     $lblProj.Font     = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
     $form.Controls.Add($lblProj)
 
     $cbProject             = New-Object System.Windows.Forms.ComboBox
     $cbProject.Location    = New-Object System.Drawing.Point(152, $yPos)
-    $cbProject.Size        = New-Object System.Drawing.Size(342, 26)
+    $cbProject.Size        = New-Object System.Drawing.Size(342, 28)
     $cbProject.Font        = New-Object System.Drawing.Font("Segoe UI", 10)
     $cbProject.DropDownStyle = "DropDownList"
     $Projects | ForEach-Object { $cbProject.Items.Add($_) | Out-Null }
     $cbProject.SelectedIndex = 0
     $form.Controls.Add($cbProject)
-    $yPos += 40
+    $yPos += 44
 
     # ── Separator ─────────────────────────────────────────────────────────────
     $sep           = New-Object System.Windows.Forms.Panel
