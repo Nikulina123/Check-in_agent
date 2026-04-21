@@ -42,7 +42,7 @@ function Write-Log {
     param([string]$Msg, [string]$Level = "INFO")
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $Level  $Msg"
     Add-Content -Path $LogFile -Value $line -Encoding UTF8
-    Write-Host $line
+    # Write-Host intentionally omitted — ps2exe -NoConsole turns every Write-Host into a popup dialog
 }
 
 # ════════════════════════════════════════════════════════════════════════════════
