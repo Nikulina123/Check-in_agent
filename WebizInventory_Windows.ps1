@@ -277,7 +277,7 @@ function Show-InventoryForm {
     # ── Form ──────────────────────────────────────────────────────────────────
     $form                  = New-Object System.Windows.Forms.Form
     $form.Text             = "Webiz Inventory Agent"
-    $form.ClientSize       = New-Object System.Drawing.Size(520, 600)
+    $form.ClientSize       = New-Object System.Drawing.Size(520, 660)
     $form.StartPosition    = "CenterScreen"
     $form.FormBorderStyle  = "FixedDialog"
     $form.MaximizeBox      = $false
@@ -376,36 +376,63 @@ function Show-InventoryForm {
 
     # ── Separator ─────────────────────────────────────────────────────────────
     $sep           = New-Object System.Windows.Forms.Panel
-    $sep.Location  = New-Object System.Drawing.Point(26, ($yPos + 12))
+    $sep.Location  = New-Object System.Drawing.Point(26, ($yPos + 10))
     $sep.Size      = New-Object System.Drawing.Size(468, 1)
     $sep.BackColor = [System.Drawing.Color]::FromArgb(208, 213, 221)
     $form.Controls.Add($sep)
-    $yPos += 24
-
-    # ── Device info preview ───────────────────────────────────────────────────
-    $lblHint          = New-Object System.Windows.Forms.Label
-    $lblHint.Text     = "Device information that will be recorded:"
-    $lblHint.Location = New-Object System.Drawing.Point(26, $yPos)
-    $lblHint.Size     = New-Object System.Drawing.Size(468, 18)
-    $lblHint.Font     = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Italic)
-    $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
-    $form.Controls.Add($lblHint)
     $yPos += 22
 
-    $preview = "  $($HW.brand) $($HW.model)  •  SN: $($HW.serial_number)  •  $($HW.os)`n" +
-               "  CPU: $($HW.cpu)  •  RAM: $($HW.ram)  •  Storage: $($HW.storage)`n" +
-               "  Host: $($HW.hostname)  •  IP: $($HW.ip_address)"
-    $lblHW          = New-Object System.Windows.Forms.Label
-    $lblHW.Text     = $preview
-    $lblHW.Location = New-Object System.Drawing.Point(26, $yPos)
-    $lblHW.Size     = New-Object System.Drawing.Size(468, 56)
-    $lblHW.Font     = New-Object System.Drawing.Font("Segoe UI", 8.5)
-    $form.Controls.Add($lblHW)
+    # ── Device info preview ───────────────────────────────────────────────────
+    $lblHint           = New-Object System.Windows.Forms.Label
+    $lblHint.Text      = "Device information that will be recorded:"
+    $lblHint.Location  = New-Object System.Drawing.Point(26, $yPos)
+    $lblHint.Size      = New-Object System.Drawing.Size(468, 20)
+    $lblHint.Font      = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
+    $form.Controls.Add($lblHint)
+    $yPos += 24
+
+    $hwPanel           = New-Object System.Windows.Forms.Panel
+    $hwPanel.Location  = New-Object System.Drawing.Point(26, $yPos)
+    $hwPanel.Size      = New-Object System.Drawing.Size(468, 142)
+    $hwPanel.BackColor = [System.Drawing.Color]::FromArgb(229, 234, 242)
+    $form.Controls.Add($hwPanel)
+
+    $hwRows = [ordered]@{
+        "Device"   = "$($HW.brand) $($HW.model)"
+        "Serial"   = $HW.serial_number
+        "OS"       = $HW.os
+        "CPU"      = $HW.cpu
+        "RAM"      = $HW.ram
+        "Storage"  = $HW.storage
+        "Hostname" = "$($HW.hostname)  /  $($HW.ip_address)"
+    }
+    $ry = 8
+    foreach ($key in $hwRows.Keys) {
+        $kLbl           = New-Object System.Windows.Forms.Label
+        $kLbl.Text      = "${key}:"
+        $kLbl.Location  = New-Object System.Drawing.Point(10, $ry)
+        $kLbl.Size      = New-Object System.Drawing.Size(72, 18)
+        $kLbl.Font      = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+        $kLbl.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
+        $hwPanel.Controls.Add($kLbl)
+
+        $vLbl           = New-Object System.Windows.Forms.Label
+        $vLbl.Text      = $hwRows[$key]
+        $vLbl.Location  = New-Object System.Drawing.Point(86, $ry)
+        $vLbl.Size      = New-Object System.Drawing.Size(374, 18)
+        $vLbl.Font      = New-Object System.Drawing.Font("Segoe UI", 9)
+        $vLbl.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+        $hwPanel.Controls.Add($vLbl)
+
+        $ry += 18
+    }
+    $yPos += 150
 
     # ── Buttons ───────────────────────────────────────────────────────────────
     $btnSubmit             = New-Object System.Windows.Forms.Button
     $btnSubmit.Text        = "Submit"
-    $btnSubmit.Location    = New-Object System.Drawing.Point(330, 555)
+    $btnSubmit.Location    = New-Object System.Drawing.Point(330, ($yPos + 8))
     $btnSubmit.Size        = New-Object System.Drawing.Size(90, 32)
     $btnSubmit.Font        = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
     $btnSubmit.BackColor   = [System.Drawing.Color]::FromArgb(232, 48, 58)
@@ -416,7 +443,7 @@ function Show-InventoryForm {
 
     $btnCancel             = New-Object System.Windows.Forms.Button
     $btnCancel.Text        = "Cancel"
-    $btnCancel.Location    = New-Object System.Drawing.Point(430, 555)
+    $btnCancel.Location    = New-Object System.Drawing.Point(430, ($yPos + 8))
     $btnCancel.Size        = New-Object System.Drawing.Size(76, 32)
     $btnCancel.Font        = New-Object System.Drawing.Font("Segoe UI", 10)
     $btnCancel.BackColor   = [System.Drawing.Color]::FromArgb(229, 231, 235)
@@ -483,7 +510,7 @@ function Register-StartupTask {
     $principal = New-ScheduledTaskPrincipal `
         -UserId   "$env:USERDOMAIN\$env:USERNAME" `
         -LogonType Interactive `
-        -RunLevel Highest
+        -RunLevel Limited
 
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
@@ -501,9 +528,8 @@ Write-Log "=== Webiz Inventory Agent started ==="
 # Register startup task if not already registered
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if (-not $task) {
-    Write-Log "First run — registering startup task and self-signing…"
+    Write-Log "First run — registering startup task…"
     Register-StartupTask
-    Invoke-SelfSign
     # Store SMTP password in Credential Manager (same as macOS stores in Keychain)
     Set-SmtpPassword $SmtpPass
     # Scrub the plaintext password from the installed copy — it now lives only in Credential Manager
