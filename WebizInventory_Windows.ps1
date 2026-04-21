@@ -17,18 +17,18 @@ $GitHubRawUrl  = "https://raw.githubusercontent.com/Nikulina123/Check-in_agent/r
 $SmtpServer       = "smtp.gmail.com"
 $SmtpPort         = 587
 $SmtpUser         = "monitoring@webiz.com"
-$SmtpPass         = "hogpycseljffcgwy"
 $AdminEmail       = "nika@webiz.com"
 $IntervalMonths   = 6
 $CancelRetryHours = 24
 $TaskName         = "WebizInventoryAgent"
 $Projects         = @("Webiz ERP","Fundbox","Playtika","Artlist","The5%ers","Other")
 
-$StateDir   = "$env:LOCALAPPDATA\WebizInventory"
-$StateFile  = "$StateDir\state.json"
-$QueueFile  = "$StateDir\queue.json"
-$LogFile    = "$StateDir\agent.log"
-$ScriptDest = "$StateDir\WebizInventory_Windows.ps1"
+$StateDir     = "$env:LOCALAPPDATA\WebizInventory"
+$StateFile    = "$StateDir\state.json"
+$QueueFile    = "$StateDir\queue.json"
+$LogFile      = "$StateDir\agent.log"
+$ScriptDest   = "$StateDir\WebizInventory_Windows.ps1"
+$SmtpCredFile = "$StateDir\smtp.cred"   # DPAPI-encrypted, readable only by this user on this machine
 
 # ── Ensure state dir ─────────────────────────────────────────────────────────
 if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
@@ -39,6 +39,74 @@ function Write-Log {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $Level  $Msg"
     Add-Content -Path $LogFile -Value $line -Encoding UTF8
     Write-Host $line
+}
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  SMTP CREDENTIAL MANAGEMENT  (DPAPI — encrypted per-user, per-machine)
+# ════════════════════════════════════════════════════════════════════════════════
+function Get-SmtpPassword {
+    if (Test-Path $SmtpCredFile) {
+        try {
+            $secure = Get-Content $SmtpCredFile -Raw | ConvertTo-SecureString
+            return [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                       [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+        } catch {
+            Write-Log "Cannot decrypt stored SMTP credential: $_" "ERROR"
+        }
+    }
+    return $null
+}
+
+function Set-SmtpPassword {
+    param([string]$Password)
+    $Password | ConvertTo-SecureString -AsPlainText -Force |
+                ConvertFrom-SecureString |
+                Set-Content -Path $SmtpCredFile -Encoding UTF8
+    Write-Log "SMTP password encrypted and stored (DPAPI)."
+}
+
+function Request-SmtpPasswordSetup {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    $dlg                 = New-Object System.Windows.Forms.Form
+    $dlg.Text            = "Webiz Inventory — First-Time Setup"
+    $dlg.ClientSize      = New-Object System.Drawing.Size(400, 170)
+    $dlg.StartPosition   = "CenterScreen"
+    $dlg.FormBorderStyle = "FixedDialog"
+    $dlg.MaximizeBox     = $false
+    $dlg.Font            = New-Object System.Drawing.Font("Segoe UI", 10)
+
+    $lbl          = New-Object System.Windows.Forms.Label
+    $lbl.Text     = "Enter the SMTP password for $SmtpUser`:`n(Stored encrypted — only readable by this user on this machine.)"
+    $lbl.Location = New-Object System.Drawing.Point(16, 16)
+    $lbl.Size     = New-Object System.Drawing.Size(368, 44)
+    $dlg.Controls.Add($lbl)
+
+    $tb                      = New-Object System.Windows.Forms.TextBox
+    $tb.Location             = New-Object System.Drawing.Point(16, 68)
+    $tb.Size                 = New-Object System.Drawing.Size(368, 26)
+    $tb.UseSystemPasswordChar = $true
+    $dlg.Controls.Add($tb)
+
+    $btn              = New-Object System.Windows.Forms.Button
+    $btn.Text         = "Save"
+    $btn.Location     = New-Object System.Drawing.Point(292, 110)
+    $btn.Size         = New-Object System.Drawing.Size(92, 32)
+    $btn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $btn.BackColor    = [System.Drawing.Color]::FromArgb(232, 48, 58)
+    $btn.ForeColor    = [System.Drawing.Color]::White
+    $btn.FlatStyle    = "Flat"
+    $btn.FlatAppearance.BorderSize = 0
+    $dlg.AcceptButton = $btn
+    $dlg.Controls.Add($btn)
+
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $tb.Text.Trim()) {
+        Set-SmtpPassword $tb.Text.Trim()
+        return $true
+    }
+    Write-Log "SMTP setup skipped — email notifications will not work." "WARN"
+    return $false
 }
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -122,7 +190,7 @@ function Send-InventoryEmail {
 
         $smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $SmtpPort)
         $smtp.EnableSsl   = $true
-        $smtp.Credentials = New-Object System.Net.NetworkCredential($SmtpUser, $SmtpPass)
+        $smtp.Credentials = New-Object System.Net.NetworkCredential($SmtpUser, (Get-SmtpPassword))
         $smtp.Send($msg)
         Write-Log "Email sent → $($recipients -join ', ')"
     } catch {
@@ -494,6 +562,12 @@ if (-not $task) {
     Write-Log "First run — registering startup task and self-signing…"
     Register-StartupTask
     Invoke-SelfSign
+}
+
+# Ensure SMTP credential is stored (prompts once if missing)
+if (-not (Test-Path $SmtpCredFile)) {
+    Write-Log "SMTP credential not configured — prompting for setup."
+    Request-SmtpPasswordSetup | Out-Null
 }
 
 # Self-update check
