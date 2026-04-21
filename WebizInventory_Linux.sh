@@ -94,21 +94,61 @@ fi
 # ── Step 3: Download the agent ────────────────────────────────────────────────
 echo ""
 echo "[3/6] Downloading inventory agent from GitHub…"
+echo "      URL: $GITHUB_RAW_URL"
 mkdir -p "$AGENT_DIR"
 
+DOWNLOAD_OK=false
 if command -v curl &>/dev/null; then
-    curl -fsSL "$GITHUB_RAW_URL" -o "$AGENT_FILE"
-elif command -v wget &>/dev/null; then
-    wget -q "$GITHUB_RAW_URL" -O "$AGENT_FILE"
-else
-    "$PYTHON3" -c "
-import urllib.request
-urllib.request.urlretrieve('$GITHUB_RAW_URL', '$AGENT_FILE')
-print('      Downloaded via Python urllib.')
-"
+    if curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 \
+            "$GITHUB_RAW_URL" -o "$AGENT_FILE" 2>&1; then
+        DOWNLOAD_OK=true
+    fi
 fi
+
+if [[ "$DOWNLOAD_OK" == false ]] && command -v wget &>/dev/null; then
+    echo "      curl failed — trying wget…"
+    if wget --tries=3 --timeout=15 "$GITHUB_RAW_URL" -O "$AGENT_FILE" 2>&1; then
+        DOWNLOAD_OK=true
+    fi
+fi
+
+if [[ "$DOWNLOAD_OK" == false ]]; then
+    echo "      curl/wget failed — trying Python urllib…"
+    "$PYTHON3" -c "
+import urllib.request, sys
+try:
+    urllib.request.urlretrieve('$GITHUB_RAW_URL', '$AGENT_FILE')
+    print('      Downloaded via Python urllib.')
+except Exception as e:
+    print(f'      urllib failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" && DOWNLOAD_OK=true
+fi
+
+if [[ "$DOWNLOAD_OK" == false ]]; then
+    echo ""
+    echo "  [ERROR] Could not download inventory_agent.py."
+    echo "  Possible causes:"
+    echo "    • GitHub repo is private — make it public or check the URL"
+    echo "    • File not yet pushed to the repo"
+    echo "    • No internet connection"
+    echo "  URL tried: $GITHUB_RAW_URL"
+    exit 1
+fi
+
+if [[ ! -s "$AGENT_FILE" ]]; then
+    echo "  [ERROR] Downloaded file is empty."
+    exit 1
+fi
+if head -1 "$AGENT_FILE" | grep -qi "<!DOCTYPE\|<html"; then
+    echo "  [ERROR] GitHub returned an HTML page — repo/file may not exist yet."
+    echo "  URL: $GITHUB_RAW_URL"
+    rm -f "$AGENT_FILE"
+    exit 1
+fi
+
 chmod +x "$AGENT_FILE"
-echo "      Agent saved to: $AGENT_FILE"
+echo "      ✔  Agent saved to: $AGENT_FILE"
 
 # ── Step 4: Write config ──────────────────────────────────────────────────────
 echo ""
