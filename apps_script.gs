@@ -49,13 +49,24 @@ const CHANGELOG_HEADERS = ["Timestamp", "Serial Number", "Hostname", "Comment"];
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Current timestamp in Tbilisi time (UTC+4).
- * Example: "2026-04-21T14:30:00+04:00"
+ * Current timestamp in Tbilisi time (UTC+4), human-readable.
+ * Example: "21 Apr 2026, 14:30:00"
  */
 function getTbilisiTimestamp() {
   const now   = new Date();
   const local = new Date(now.getTime() + 4 * 60 * 60 * 1000);
-  return local.toISOString().replace(/\.\d{3}Z$/, "+04:00");
+
+  const months = ["Jan","Feb","Mar","Apr","May","Jun",
+                  "Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  const dd  = String(local.getUTCDate()).padStart(2, "0");
+  const mon = months[local.getUTCMonth()];
+  const yy  = local.getUTCFullYear();
+  const hh  = String(local.getUTCHours()).padStart(2, "0");
+  const mm  = String(local.getUTCMinutes()).padStart(2, "0");
+  const ss  = String(local.getUTCSeconds()).padStart(2, "0");
+
+  return `${dd} ${mon} ${yy}, ${hh}:${mm}:${ss}`;
 }
 
 /**
