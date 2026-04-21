@@ -28,7 +28,10 @@ $StateDir   = "$env:LOCALAPPDATA\WebizInventory"
 $StateFile  = "$StateDir\state.json"
 $QueueFile  = "$StateDir\queue.json"
 $LogFile    = "$StateDir\agent.log"
-$ScriptDest = "$StateDir\WebizInventory_Windows.ps1"
+# Detect whether we are running as a compiled EXE (ps2exe) or a plain PS1
+$IsExe      = $PSCommandPath -like "*.exe"
+$ScriptDest = if ($IsExe) { "$StateDir\WebizInventory_Windows.exe" } `
+                          else { "$StateDir\WebizInventory_Windows.ps1" }
 $CredVaultResource = "WebizInventoryAgent"   # key name in Windows Credential Manager
 
 # ── Ensure state dir ─────────────────────────────────────────────────────────
@@ -77,6 +80,7 @@ function Set-SmtpPassword {
 #  SELF-UPDATE
 # ════════════════════════════════════════════════════════════════════════════════
 function Invoke-SelfUpdate {
+    if ($IsExe) { return }   # compiled EXE — distribute a new EXE to update
     if (-not $GitHubRawUrl -or $GitHubRawUrl -like "*YOUR_ORG*") { return }
     try {
         Write-Log "Checking for updates…"
@@ -493,9 +497,13 @@ function Register-StartupTask {
     # Copy script to a stable path so the task still works if the original is deleted
     Copy-Item -Path $PSCommandPath -Destination $ScriptDest -Force
 
-    $action   = New-ScheduledTaskAction `
-        -Execute  "powershell.exe" `
-        -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$ScriptDest`""
+    # EXE runs directly; PS1 needs the powershell.exe wrapper
+    $action = if ($IsExe) {
+        New-ScheduledTaskAction -Execute "`"$ScriptDest`""
+    } else {
+        New-ScheduledTaskAction -Execute "powershell.exe" `
+            -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$ScriptDest`""
+    }
 
     $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $trigger.Delay = "PT1M30S"   # wait 90 s for desktop to be ready (ISO 8601 format)
@@ -532,13 +540,15 @@ if (-not $task) {
     Register-StartupTask
     # Store SMTP password in Credential Manager (same as macOS stores in Keychain)
     Set-SmtpPassword $SmtpPass
-    # Scrub the plaintext password from the installed copy — it now lives only in Credential Manager
-    try {
-        $scrubbed = (Get-Content $ScriptDest -Raw) -replace '(?m)^\$SmtpPass\s+=\s+"[^"]*"', '$SmtpPass         = ""'
-        [System.IO.File]::WriteAllText($ScriptDest, $scrubbed, (New-Object System.Text.UTF8Encoding $true))
-        Write-Log "Plaintext password scrubbed from installed copy."
-    } catch {
-        Write-Log "Could not scrub password from installed copy: $_" "WARN"
+    # PS1 only: scrub the plaintext password from the installed copy (EXE binary is not human-readable)
+    if (-not $IsExe) {
+        try {
+            $scrubbed = (Get-Content $ScriptDest -Raw) -replace '(?m)^\$SmtpPass\s+=\s+"[^"]*"', '$SmtpPass         = ""'
+            [System.IO.File]::WriteAllText($ScriptDest, $scrubbed, (New-Object System.Text.UTF8Encoding $true))
+            Write-Log "Plaintext password scrubbed from installed copy."
+        } catch {
+            Write-Log "Could not scrub password from installed copy: $_" "WARN"
+        }
     }
 }
 
