@@ -8,7 +8,7 @@
 
 # ─── CONFIGURATION — edit these two lines before distributing ────────────────
 APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycbxUVGyr5SuH7gjEc7zS5CcZkDV03qVGw7JbPHwvTFwLEUImY3xbRE8V8D4SQNalBMUdGw/exec"          # ← FILL IN
-GITHUB_RAW_URL="https://raw.githubusercontent.com/Nikulina123/Check-in_agent/main/inventory_agent.py"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/Nikulina123/Check-in_Agent/main/inventory_agent.py"
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -uo pipefail   # note: -e removed so we can show real errors before exiting
@@ -43,7 +43,13 @@ echo ""
 # ── Step 1: Locate Python 3 ───────────────────────────────────────────────────
 echo "[1/5] Locating Python 3…"
 PYTHON3=""
-for candidate in python3 python; do
+# Prefer Homebrew Python (ships with a modern, compatible Tcl/Tk) over the
+# Apple system Python 3.9 which bundles an older Tcl/Tk incompatible with macOS 26+.
+for candidate in \
+        /opt/homebrew/bin/python3 \
+        /usr/local/bin/python3 \
+        python3 \
+        python; do
     if command -v "$candidate" &>/dev/null; then
         ver=$("$candidate" --version 2>&1 || true)
         if [[ "$ver" == Python\ 3* ]]; then
@@ -70,12 +76,29 @@ if [[ -z "$PYTHON3" ]]; then
     fi
 fi
 
-# Check tkinter (bundled with python.org builds, may be absent in some Homebrew builds)
-if ! "$PYTHON3" -c "import tkinter" 2>/dev/null; then
-    echo "      tkinter missing — trying: brew install python-tk"
-    brew install python-tk 2>/dev/null || true
-    if ! "$PYTHON3" -c "import tkinter" 2>/dev/null; then
-        echo "  [ERROR] tkinter still missing. Install python-tk manually."
+# Check tkinter: verify it can actually open a window (not just import).
+# The Apple system Python 3.9 imports tkinter fine but crashes with an
+# "Abort trap: 6" when Tk() is instantiated on macOS 26+ due to a stale
+# Tcl/Tk internal version check.
+_tkinter_works() {
+    "$PYTHON3" -c "import tkinter; r=tkinter.Tk(); r.destroy()" 2>/dev/null
+}
+
+if ! _tkinter_works; then
+    echo "      tkinter not functional — trying: brew install python-tk"
+    if command -v brew &>/dev/null; then
+        brew install python-tk 2>/dev/null || true
+        # After installing python-tk the Homebrew python3 gains a working tkinter
+        if [[ -x /opt/homebrew/bin/python3 ]]; then
+            PYTHON3=/opt/homebrew/bin/python3
+        elif [[ -x /usr/local/bin/python3 ]]; then
+            PYTHON3=/usr/local/bin/python3
+        fi
+    fi
+    if ! _tkinter_works; then
+        echo "  [ERROR] tkinter still not functional."
+        echo "  Fix: install Python 3 from https://www.python.org/downloads/ (includes Tcl/Tk)"
+        echo "  or run: brew install python-tk"
         exit 1
     fi
 fi
