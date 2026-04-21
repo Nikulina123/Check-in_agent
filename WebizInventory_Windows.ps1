@@ -281,7 +281,7 @@ Add-Type -AssemblyName System.Drawing
 function Show-InventoryForm {
     param([hashtable]$HW)
 
-    $result = @{ submitted = $false; user_data = @{} }
+    $result = @{ submitted = $false; user_data = @{}; closing = $false }
 
     # ── Form ──────────────────────────────────────────────────────────────────
     $form                  = New-Object System.Windows.Forms.Form
@@ -488,7 +488,26 @@ function Show-InventoryForm {
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Warning
         )
-        if ($ans -eq "Yes") { $result.submitted = $false; $form.Close() }
+        if ($ans -eq "Yes") { $result.closing = $true; $result.submitted = $false; $form.Close() }
+    })
+
+    $form.Add_FormClosing({
+        param($s, $e)
+        # Skip if already confirmed (Submit or Cancel-Yes already handled it)
+        if ($result.submitted -or $result.closing) { return }
+        # X button — treat same as Cancel
+        $ans = [System.Windows.Forms.MessageBox]::Show(
+            "Are you sure you want to skip?`n`n• IT will be notified`n• You'll be reminded again in 24 hours",
+            "Cancel check-in",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        if ($ans -eq "Yes") {
+            $result.closing = $true
+            $result.submitted = $false
+        } else {
+            $e.Cancel = $true   # block the close
+        }
     })
 
     $form.ShowDialog() | Out-Null
