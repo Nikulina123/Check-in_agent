@@ -85,14 +85,21 @@ function Invoke-SelfUpdate {
         $hash = { param($s) [System.Security.Cryptography.SHA256]::Create().ComputeHash(
                       [System.Text.Encoding]::UTF8.GetBytes($s)) }
         if ((&$hash $new) -ne (&$hash $cur)) {
-            Write-Log "Update found — scheduling replacement and restart."
             $tmp = [System.IO.Path]::GetTempFileName() + ".ps1"
             $new | Out-File -FilePath $tmp -Encoding UTF8
-            # Copy over after script exits, then restart from destination
-            $cmd = "timeout /t 2 /nobreak >nul & copy /Y `"$tmp`" `"$ScriptDest`" & " +
-                   "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptDest`""
-            Start-Process "cmd.exe" -ArgumentList "/c $cmd" -WindowStyle Hidden
-            exit 0
+            if ($PSCommandPath -eq $ScriptDest) {
+                # Running from installed location — replace and restart silently
+                Write-Log "Update found — scheduling replacement and restart."
+                $cmd = "timeout /t 2 /nobreak >nul & copy /Y `"$tmp`" `"$ScriptDest`" & " +
+                       "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptDest`""
+                Start-Process "cmd.exe" -ArgumentList "/c $cmd" -WindowStyle Hidden
+                exit 0
+            } else {
+                # Running from another location (e.g. Downloads) — update installed copy silently, keep going
+                Write-Log "Update found — updating installed copy. Continuing current run."
+                Copy-Item -Path $tmp -Destination $ScriptDest -Force -ErrorAction SilentlyContinue
+                Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+            }
         }
     } catch {
         Write-Log "Update check failed: $_" "WARN"
@@ -464,7 +471,7 @@ function Register-StartupTask {
         -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$ScriptDest`""
 
     $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $trigger.Delay = (New-TimeSpan -Seconds 90)   # wait 90 s for desktop to be ready
+    $trigger.Delay = "PT1M30S"   # wait 90 s for desktop to be ready (ISO 8601 format)
 
     $settings = New-ScheduledTaskSettingsSet `
         -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
@@ -494,10 +501,19 @@ Write-Log "=== Webiz Inventory Agent started ==="
 # Register startup task if not already registered
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if (-not $task) {
-    Write-Log "First run — registering startup task…"
+    Write-Log "First run — registering startup task and self-signing…"
     Register-StartupTask
+    Invoke-SelfSign
     # Store SMTP password in Credential Manager (same as macOS stores in Keychain)
     Set-SmtpPassword $SmtpPass
+    # Scrub the plaintext password from the installed copy — it now lives only in Credential Manager
+    try {
+        $scrubbed = (Get-Content $ScriptDest -Raw) -replace '(?m)^\$SmtpPass\s+=\s+"[^"]*"', '$SmtpPass         = ""'
+        [System.IO.File]::WriteAllText($ScriptDest, $scrubbed, (New-Object System.Text.UTF8Encoding $true))
+        Write-Log "Plaintext password scrubbed from installed copy."
+    } catch {
+        Write-Log "Could not scrub password from installed copy: $_" "WARN"
+    }
 }
 
 # Self-update check
