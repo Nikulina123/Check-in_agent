@@ -1,2 +1,2 @@
 @echo off
-powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File "%~dp0WebizInventory_Windows.ps1"
+powershell.exe -ExecutionPolicy Bypass -File "%~dp0WebizInventory_Windows.ps1"

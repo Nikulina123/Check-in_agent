@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Webiz Inventory Agent for Windows — self-contained, no Python needed.
@@ -17,18 +17,19 @@ $GitHubRawUrl  = "https://raw.githubusercontent.com/Nikulina123/Check-in_agent/r
 $SmtpServer       = "smtp.gmail.com"
 $SmtpPort         = 587
 $SmtpUser         = "monitoring@webiz.com"
+$SmtpPass         = "hogpycseljffcgwy"   # stored in Credential Manager on first run; never written to disk
 $AdminEmail       = "nika@webiz.com"
 $IntervalMonths   = 6
 $CancelRetryHours = 24
 $TaskName         = "WebizInventoryAgent"
 $Projects         = @("Webiz ERP","Fundbox","Playtika","Artlist","The5%ers","Other")
 
-$StateDir     = "$env:LOCALAPPDATA\WebizInventory"
-$StateFile    = "$StateDir\state.json"
-$QueueFile    = "$StateDir\queue.json"
-$LogFile      = "$StateDir\agent.log"
-$ScriptDest   = "$StateDir\WebizInventory_Windows.ps1"
-$SmtpCredFile = "$StateDir\smtp.cred"   # DPAPI-encrypted, readable only by this user on this machine
+$StateDir   = "$env:LOCALAPPDATA\WebizInventory"
+$StateFile  = "$StateDir\state.json"
+$QueueFile  = "$StateDir\queue.json"
+$LogFile    = "$StateDir\agent.log"
+$ScriptDest = "$StateDir\WebizInventory_Windows.ps1"
+$CredVaultResource = "WebizInventoryAgent"   # key name in Windows Credential Manager
 
 # ── Ensure state dir ─────────────────────────────────────────────────────────
 if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
@@ -42,71 +43,34 @@ function Write-Log {
 }
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  SMTP CREDENTIAL MANAGEMENT  (DPAPI — encrypted per-user, per-machine)
+#  SMTP CREDENTIAL MANAGEMENT  (Windows Credential Manager — same as macOS Keychain)
 # ════════════════════════════════════════════════════════════════════════════════
+function Load-PasswordVault {
+    [void][Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime]
+}
+
 function Get-SmtpPassword {
-    if (Test-Path $SmtpCredFile) {
-        try {
-            $secure = Get-Content $SmtpCredFile -Raw | ConvertTo-SecureString
-            return [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                       [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
-        } catch {
-            Write-Log "Cannot decrypt stored SMTP credential: $_" "ERROR"
-        }
+    try {
+        Load-PasswordVault
+        $vault = New-Object Windows.Security.Credentials.PasswordVault
+        $cred  = $vault.Retrieve($CredVaultResource, $SmtpUser)
+        $cred.RetrievePassword()
+        return $cred.Password
+    } catch {
+        Write-Log "SMTP password not found in Credential Manager." "WARN"
+        return $null
     }
-    return $null
 }
 
 function Set-SmtpPassword {
     param([string]$Password)
-    $Password | ConvertTo-SecureString -AsPlainText -Force |
-                ConvertFrom-SecureString |
-                Set-Content -Path $SmtpCredFile -Encoding UTF8
-    Write-Log "SMTP password encrypted and stored (DPAPI)."
-}
-
-function Request-SmtpPasswordSetup {
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-
-    $dlg                 = New-Object System.Windows.Forms.Form
-    $dlg.Text            = "Webiz Inventory — First-Time Setup"
-    $dlg.ClientSize      = New-Object System.Drawing.Size(400, 170)
-    $dlg.StartPosition   = "CenterScreen"
-    $dlg.FormBorderStyle = "FixedDialog"
-    $dlg.MaximizeBox     = $false
-    $dlg.Font            = New-Object System.Drawing.Font("Segoe UI", 10)
-
-    $lbl          = New-Object System.Windows.Forms.Label
-    $lbl.Text     = "Enter the SMTP password for $SmtpUser`:`n(Stored encrypted — only readable by this user on this machine.)"
-    $lbl.Location = New-Object System.Drawing.Point(16, 16)
-    $lbl.Size     = New-Object System.Drawing.Size(368, 44)
-    $dlg.Controls.Add($lbl)
-
-    $tb                      = New-Object System.Windows.Forms.TextBox
-    $tb.Location             = New-Object System.Drawing.Point(16, 68)
-    $tb.Size                 = New-Object System.Drawing.Size(368, 26)
-    $tb.UseSystemPasswordChar = $true
-    $dlg.Controls.Add($tb)
-
-    $btn              = New-Object System.Windows.Forms.Button
-    $btn.Text         = "Save"
-    $btn.Location     = New-Object System.Drawing.Point(292, 110)
-    $btn.Size         = New-Object System.Drawing.Size(92, 32)
-    $btn.DialogResult = [System.Windows.Forms.DialogResult]::OK
-    $btn.BackColor    = [System.Drawing.Color]::FromArgb(232, 48, 58)
-    $btn.ForeColor    = [System.Drawing.Color]::White
-    $btn.FlatStyle    = "Flat"
-    $btn.FlatAppearance.BorderSize = 0
-    $dlg.AcceptButton = $btn
-    $dlg.Controls.Add($btn)
-
-    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $tb.Text.Trim()) {
-        Set-SmtpPassword $tb.Text.Trim()
-        return $true
-    }
-    Write-Log "SMTP setup skipped — email notifications will not work." "WARN"
-    return $false
+    Load-PasswordVault
+    $vault = New-Object Windows.Security.Credentials.PasswordVault
+    # Remove existing entry if present
+    try { $vault.Remove($vault.Retrieve($CredVaultResource, $SmtpUser)) } catch {}
+    $vault.Add((New-Object Windows.Security.Credentials.PasswordCredential(
+        $CredVaultResource, $SmtpUser, $Password)))
+    Write-Log "SMTP password stored in Windows Credential Manager."
 }
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -179,6 +143,8 @@ function Test-ShouldRun {
 # ════════════════════════════════════════════════════════════════════════════════
 function Send-InventoryEmail {
     param([string]$Subject, [string]$Body, [string]$ExtraTo = "")
+    $smtpPass = Get-SmtpPassword
+    if (-not $smtpPass) { Write-Log "Email skipped — SMTP credential not configured." "WARN"; return }
     $recipients = @($AdminEmail)
     if ($ExtraTo -and $ExtraTo -ne $AdminEmail) { $recipients += $ExtraTo }
     try {
@@ -190,7 +156,7 @@ function Send-InventoryEmail {
 
         $smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $SmtpPort)
         $smtp.EnableSsl   = $true
-        $smtp.Credentials = New-Object System.Net.NetworkCredential($SmtpUser, (Get-SmtpPassword))
+        $smtp.Credentials = New-Object System.Net.NetworkCredential($SmtpUser, $smtpPass)
         $smtp.Send($msg)
         Write-Log "Email sent → $($recipients -join ', ')"
     } catch {
@@ -501,10 +467,11 @@ function Register-StartupTask {
     $trigger.Delay = (New-TimeSpan -Seconds 90)   # wait 90 s for desktop to be ready
 
     $settings = New-ScheduledTaskSettingsSet `
-        -ExecutionTimeLimit         (New-TimeSpan -Hours 1) `
-        -DisallowStartIfOnBatteries $false `
-        -StopIfGoingOnBatteries     $false `
-        -MultipleInstances          IgnoreNew
+        -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+        -MultipleInstances  IgnoreNew
+    # Allow running on battery — set via CIM properties (parameter name varies by PS version)
+    $settings.DisallowStartIfOnBatteries = $false
+    $settings.StopIfGoingOnBatteries     = $false
 
     $principal = New-ScheduledTaskPrincipal `
         -UserId   "$env:USERDOMAIN\$env:USERNAME" `
@@ -520,38 +487,6 @@ function Register-StartupTask {
 }
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  SELF-SIGNING (runs once on first install if running as admin)
-# ════════════════════════════════════════════════════════════════════════════════
-function Invoke-SelfSign {
-    try {
-        # Check if already signed
-        $sig = Get-AuthenticodeSignature $ScriptDest -ErrorAction SilentlyContinue
-        if ($sig -and $sig.Status -eq "Valid") { return }
-
-        # Create a self-signed code-signing certificate in the user store
-        $cert = New-SelfSignedCertificate `
-            -Subject          "CN=WebizInventory,O=Webiz,C=GE" `
-            -Type             CodeSigningCert `
-            -KeyUsage         DigitalSignature `
-            -NotAfter         (Get-Date).AddYears(10) `
-            -CertStoreLocation "Cert:\CurrentUser\My" `
-            -ErrorAction Stop
-
-        # Trust it locally for code signing
-        $cer = "$env:TEMP\webiz_codesign.cer"
-        $cert | Export-Certificate -FilePath $cer -Type CERT | Out-Null
-        Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\Root"        | Out-Null
-        Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" | Out-Null
-        Remove-Item $cer -Force
-
-        Set-AuthenticodeSignature -FilePath $ScriptDest -Certificate $cert | Out-Null
-        Write-Log "Script self-signed with certificate: $($cert.Thumbprint)"
-    } catch {
-        Write-Log "Self-signing skipped: $_" "WARN"
-    }
-}
-
-# ════════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ════════════════════════════════════════════════════════════════════════════════
 Write-Log "=== Webiz Inventory Agent started ==="
@@ -559,15 +494,10 @@ Write-Log "=== Webiz Inventory Agent started ==="
 # Register startup task if not already registered
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if (-not $task) {
-    Write-Log "First run — registering startup task and self-signing…"
+    Write-Log "First run — registering startup task…"
     Register-StartupTask
-    Invoke-SelfSign
-}
-
-# Ensure SMTP credential is stored (prompts once if missing)
-if (-not (Test-Path $SmtpCredFile)) {
-    Write-Log "SMTP credential not configured — prompting for setup."
-    Request-SmtpPasswordSetup | Out-Null
+    # Store SMTP password in Credential Manager (same as macOS stores in Keychain)
+    Set-SmtpPassword $SmtpPass
 }
 
 # Self-update check
