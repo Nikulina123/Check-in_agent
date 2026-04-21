@@ -7,7 +7,7 @@
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ─── CONFIGURATION — edit these two lines before distributing ────────────────
-APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycbxUVGyr5SuH7gjEc7zS5CcZkDV03qVGw7JbPHwvTFwLEUImY3xbRE8V8D4SQNalBMUdGw/exec"          # ← FILL IN
+APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycby6FB8za9QVHOJDbYh06Vj4fP-JlYSwgub9nIM8wfyHeSQsEZfM14KNFm12fPu5b49cdg/exec"          # ← FILL IN
 GITHUB_RAW_URL="https://raw.githubusercontent.com/Nikulina123/Check-in_Agent/main/inventory_agent.py"
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -80,22 +80,28 @@ fi
 # The Apple system Python 3.9 imports tkinter fine but crashes with an
 # "Abort trap: 6" when Tk() is instantiated on macOS 26+ due to a stale
 # Tcl/Tk internal version check.
+# Wrap in a nested subshell so the shell's "Abort trap: 6" job-control
+# message is printed into the subshell's stderr and can be redirected away.
 _tkinter_works() {
-    "$PYTHON3" -c "import tkinter; r=tkinter.Tk(); r.destroy()" 2>/dev/null
+    { ( "$PYTHON3" -c "import tkinter; r=tkinter.Tk(); r.destroy()" 2>/dev/null ); } 2>/dev/null
 }
 
 if ! _tkinter_works; then
-    echo "      tkinter not functional — trying: brew install python-tk"
+    echo "      tkinter not functional (Tcl/Tk incompatible with this macOS version)."
+    echo "      Trying: brew install python-tk …"
     if command -v brew &>/dev/null; then
-        brew install python-tk 2>/dev/null || true
-        # After installing python-tk the Homebrew python3 gains a working tkinter
+        brew install python-tk || true
+        # brew install python-tk pulls in a Homebrew Python with a working Tcl/Tk
         if [[ -x /opt/homebrew/bin/python3 ]]; then
             PYTHON3=/opt/homebrew/bin/python3
         elif [[ -x /usr/local/bin/python3 ]]; then
             PYTHON3=/usr/local/bin/python3
         fi
+    else
+        echo "      Homebrew not found — cannot auto-install python-tk."
     fi
     if ! _tkinter_works; then
+        echo ""
         echo "  [ERROR] tkinter still not functional."
         echo "  Fix: install Python 3 from https://www.python.org/downloads/ (includes Tcl/Tk)"
         echo "  or run: brew install python-tk"

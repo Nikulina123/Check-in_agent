@@ -9,7 +9,7 @@
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ─── CONFIGURATION — edit these two lines before distributing ────────────────
-APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycbxUVGyr5SuH7gjEc7zS5CcZkDV03qVGw7JbPHwvTFwLEUImY3xbRE8V8D4SQNalBMUdGw/exec"          # ← FILL IN
+APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycby6FB8za9QVHOJDbYh06Vj4fP-JlYSwgub9nIM8wfyHeSQsEZfM14KNFm12fPu5b49cdg/exec"          # ← FILL IN
 GITHUB_RAW_URL="https://raw.githubusercontent.com/Nikulina123/Check-in_Agent/main/inventory_agent.py"
 # ─────────────────────────────────────────────────────────────────────────────
 
