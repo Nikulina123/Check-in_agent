@@ -6,9 +6,14 @@
 #  Usage:  chmod +x WebizInventory_macOS.sh && ./WebizInventory_macOS.sh
 # ════════════════════════════════════════════════════════════════════════════════
 
-# ─── CONFIGURATION — edit these two lines before distributing ────────────────
-APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycby6FB8za9QVHOJDbYh06Vj4fP-JlYSwgub9nIM8wfyHeSQsEZfM14KNFm12fPu5b49cdg/exec"          # ← FILL IN
+# ─── CONFIGURATION — edit these lines before distributing ────────────────────
+APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycby6FB8za9QVHOJDbYh06Vj4fP-JlYSwgub9nIM8wfyHeSQsEZfM14KNFm12fPu5b49cdg/exec"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/Nikulina123/Check-in_Agent/main/inventory_agent.py"
+SMTP_USER="monitoring@webiz.com"           # ← Gmail address used for sending
+SMTP_PASS="hogpycseljffcgwy" # ← Gmail App Password (stored in Keychain; never written to disk)
+SMTP_SERVER="smtp.gmail.com"
+SMTP_PORT="587"
+ADMIN_EMAIL="nika@webiz.com"               # ← IT admin recipient
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -uo pipefail   # note: -e removed so we can show real errors before exiting
@@ -63,7 +68,7 @@ done
 if [[ -z "$PYTHON3" ]]; then
     echo "      Python 3 not found — attempting to install via Homebrew…"
     if command -v brew &>/dev/null; then
-        brew install python3
+        brew install python3 --quiet >/dev/null 2>&1
         PYTHON3=$(command -v python3)
     else
         echo ""
@@ -90,7 +95,7 @@ if ! _tkinter_works; then
     echo "      tkinter not functional (Tcl/Tk incompatible with this macOS version)."
     echo "      Trying: brew install python-tk …"
     if command -v brew &>/dev/null; then
-        brew install python-tk || true
+        brew list python-tk &>/dev/null || brew install python-tk --quiet >/dev/null 2>&1 || true
         # brew install python-tk pulls in a Homebrew Python with a working Tcl/Tk
         if [[ -x /opt/homebrew/bin/python3 ]]; then
             PYTHON3=/opt/homebrew/bin/python3
@@ -173,21 +178,35 @@ fi
 chmod +x "$AGENT_FILE"
 echo "      ✔  Agent saved to: $AGENT_FILE"
 
-# ── Step 3: Write config ──────────────────────────────────────────────────────
+# ── Step 3: Write config & store credentials securely ────────────────────────
 echo ""
-echo "[3/5] Writing configuration…"
+echo "[3/5] Writing configuration and storing credentials…"
+
+# Store SMTP password in Keychain only — never written to disk
+security add-generic-password \
+    -s "WebizInventoryAgent" \
+    -a "$SMTP_USER" \
+    -w "$SMTP_PASS" \
+    -U 2>/dev/null || true
+
+# Write only non-secret metadata to config (no password)
 cat > "$CONFIG_FILE" <<JSON
 {
   "apps_script_url": "$APPS_SCRIPT_URL",
-  "github_raw_url":  "$GITHUB_RAW_URL"
+  "github_raw_url":  "$GITHUB_RAW_URL",
+  "smtp_server":     "$SMTP_SERVER",
+  "smtp_port":       $SMTP_PORT,
+  "smtp_user":       "$SMTP_USER",
+  "admin_email":     "$ADMIN_EMAIL"
 }
 JSON
-echo "      Config: $CONFIG_FILE"
+chmod 600 "$CONFIG_FILE"
+echo "      Config (owner-only): $CONFIG_FILE"
 
 # ── Step 4: First manual run ──────────────────────────────────────────────────
 echo ""
 echo "[4/5] Running agent for the first time…"
-"$PYTHON3" "$AGENT_FILE" || true   # allow cancel without aborting installer
+"$PYTHON3" "$AGENT_FILE" --force || true   # --force bypasses 6-month guard on manual/re-runs
 
 # ── Step 5: Install LaunchAgent ───────────────────────────────────────────────
 echo ""

@@ -5,7 +5,7 @@ Cross-platform (macOS + Linux) — zero pip dependencies.
 Config is loaded from  ~/.webiz_inventory/config.json  (written by the installer).
 """
 
-import os, sys, json, platform, subprocess, smtplib, datetime, hashlib, socket, re, time
+import os, sys, json, platform, subprocess, smtplib, datetime, hashlib, socket, re, time, argparse
 import urllib.request, urllib.error
 from pathlib import Path
 from email.mime.text import MIMEText
@@ -50,13 +50,27 @@ if CONFIG_FILE.exists():
 APPS_SCRIPT_URL  = _cfg.get("apps_script_url", "https://script.google.com/macros/s/PLACEHOLDER/exec")
 GITHUB_RAW_URL   = _cfg.get("github_raw_url", "")
 
-SMTP_SERVER      = "smtp.gmail.com"
-SMTP_PORT        = 587
-SMTP_USER        = "monitoring@webiz.com"
-SMTP_PASS        = "hogpycseljffcgwy"
-ADMIN_EMAIL      = "nika@webiz.com"
+SMTP_SERVER      = _cfg.get("smtp_server", "smtp.gmail.com")
+SMTP_PORT        = int(_cfg.get("smtp_port", 587))
+SMTP_USER        = _cfg.get("smtp_user", "")
+ADMIN_EMAIL      = _cfg.get("admin_email", "")
 INTERVAL_MONTHS  = 6
 CANCEL_RETRY_H   = 24
+
+def _get_smtp_pass() -> str:
+    """Read SMTP password from macOS Keychain. Never stored on disk or in source."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "WebizInventoryAgent", "-w"],
+            capture_output=True, text=True, timeout=10,
+        )
+        pw = result.stdout.strip()
+        if pw:
+            return pw
+        log.error("Keychain: WebizInventoryAgent password not found.")
+    except Exception as e:
+        log.error(f"Keychain lookup failed: {e}")
+    return ""
 
 PROJECTS = ["Webiz ERP", "Fundbox", "Playtika", "Artlist", "The5%ers", "Other"]
 
@@ -210,7 +224,7 @@ def send_email(subject: str, body: str, extra_to: Optional[str] = None):
         msg.attach(MIMEText(body, "plain"))
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as s:
             s.starttls()
-            s.login(SMTP_USER, SMTP_PASS)
+            s.login(SMTP_USER, _get_smtp_pass())
             s.sendmail(SMTP_USER, recipients, msg.as_string())
         log.info(f"Email sent → {recipients}")
     except Exception as e:
@@ -253,15 +267,27 @@ def flush_queue():
         QUEUE_FILE.unlink(missing_ok=True)
         log.info("  Queue fully flushed.")
 
+class _PostRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Google Apps Script /exec redirects via 302. urllib drops POST body on redirect
+    by default (converts to GET), causing 405. This handler keeps POST through redirects."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = urllib.request.Request(
+            newurl, data=req.data,
+            headers={k: v for k, v in req.header_items()},
+            method=req.method,
+        )
+        return new_req
+
 def _post_to_sheets(payload: dict) -> bool:
     try:
-        data = json.dumps(payload).encode()
-        req  = urllib.request.Request(
+        data   = json.dumps(payload).encode()
+        req    = urllib.request.Request(
             APPS_SCRIPT_URL, data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        resp   = urllib.request.urlopen(req, timeout=15)
+        opener = urllib.request.build_opener(_PostRedirectHandler)
+        resp   = opener.open(req, timeout=15)
         result = json.loads(resp.read().decode())
         return result.get("status") == "ok"
     except Exception as e:
@@ -431,6 +457,11 @@ class InventoryForm(tk.Tk):
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
+    parser = argparse.ArgumentParser(description="Webiz Inventory Agent")
+    parser.add_argument("--force", action="store_true",
+                        help="Bypass the 6-month interval guard and show the form immediately.")
+    args = parser.parse_args()
+
     log.info("=== Webiz Inventory Agent v2.0 started ===")
 
     # When launched as a background service (LaunchAgent / systemd), stdout is not
@@ -445,9 +476,9 @@ def main():
     # 2. Flush any offline-queued submissions
     flush_queue()
 
-    # 3. Guard: exit early if not due
+    # 3. Guard: exit early if not due (skipped when --force is passed)
     state = load_state()
-    if not should_show_form(state):
+    if not args.force and not should_show_form(state):
         sys.exit(0)
 
     # 4. Collect hardware
