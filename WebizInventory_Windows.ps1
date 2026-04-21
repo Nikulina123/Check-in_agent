@@ -10,7 +10,7 @@
 # ════════════════════════════════════════════════════════════════════════════════
 #  CONFIGURATION — edit these two lines before distributing
 # ════════════════════════════════════════════════════════════════════════════════
-$AppsScriptUrl = "https://script.google.com/macros/s/AKfycby6FB8za9QVHOJDbYh06Vj4fP-JlYSwgub9nIM8wfyHeSQsEZfM14KNFm12fPu5b49cdg/exec"   # ← FILL IN
+$AppsScriptUrl = "https://script.google.com/macros/s/AKfycbzZ8wVq2DrZCzxe-nHQnq4x-mlvzvFvqZtgqHnBFAbGD_SDS0o--Ftvemow3MCsarqHZA/exec"   # ← FILL IN
 $GitHubRawUrl  = "https://raw.githubusercontent.com/Nikulina123/Check-in_agent/refs/heads/main/WebizInventory_Windows.ps1"  # ← FILL IN
 # ════════════════════════════════════════════════════════════════════════════════
 

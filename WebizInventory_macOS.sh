@@ -7,7 +7,7 @@
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ─── CONFIGURATION — edit these lines before distributing ────────────────────
-APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycby6FB8za9QVHOJDbYh06Vj4fP-JlYSwgub9nIM8wfyHeSQsEZfM14KNFm12fPu5b49cdg/exec"
+APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycbzZ8wVq2DrZCzxe-nHQnq4x-mlvzvFvqZtgqHnBFAbGD_SDS0o--Ftvemow3MCsarqHZA/exec"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/Nikulina123/Check-in_Agent/main/inventory_agent.py"
 SMTP_USER="monitoring@webiz.com"           # ← Gmail address used for sending
 SMTP_PASS="hogpycseljffcgwy" # ← Gmail App Password (stored in Keychain; never written to disk)
