@@ -267,27 +267,18 @@ def flush_queue():
         QUEUE_FILE.unlink(missing_ok=True)
         log.info("  Queue fully flushed.")
 
-class _PostRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Google Apps Script /exec redirects via 302. urllib drops POST body on redirect
-    by default (converts to GET), causing 405. This handler keeps POST through redirects."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        new_req = urllib.request.Request(
-            newurl, data=req.data,
-            headers={k: v for k, v in req.header_items()},
-            method=req.method,
-        )
-        return new_req
-
 def _post_to_sheets(payload: dict) -> bool:
     try:
-        data   = json.dumps(payload).encode()
-        req    = urllib.request.Request(
+        data = json.dumps(payload).encode()
+        req  = urllib.request.Request(
             APPS_SCRIPT_URL, data=data,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0",
+            },
             method="POST",
         )
-        opener = urllib.request.build_opener(_PostRedirectHandler)
-        resp   = opener.open(req, timeout=15)
+        resp   = urllib.request.urlopen(req, timeout=15)
         result = json.loads(resp.read().decode())
         return result.get("status") == "ok"
     except Exception as e:
