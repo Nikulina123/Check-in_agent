@@ -529,8 +529,12 @@ function Register-StartupTask {
             -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$ScriptDest`""
     }
 
-    $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $trigger.Delay = "PT1M30S"   # wait 90 s for desktop to be ready (ISO 8601 format)
+    $triggerLogon       = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $triggerLogon.Delay = "PT1M30S"   # wait 90 s for desktop to be ready (ISO 8601 format)
+
+    # Hourly trigger so the 24-h cancel retry fires even when the user stays logged in
+    $triggerHourly = New-ScheduledTaskTrigger -Once -At (Get-Date).AddHours(1) `
+        -RepetitionInterval (New-TimeSpan -Hours 1)
 
     $settings = New-ScheduledTaskSettingsSet `
         -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
@@ -545,7 +549,8 @@ function Register-StartupTask {
         -RunLevel Limited
 
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+    Register-ScheduledTask -TaskName $TaskName -Action $action `
+        -Trigger @($triggerLogon, $triggerHourly) `
         -Settings $settings -Principal $principal `
         -Description "Webiz Inventory Agent — checks in every 6 months" | Out-Null
 
