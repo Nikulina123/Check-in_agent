@@ -235,9 +235,9 @@ cat > "$PLIST_FILE" <<PLIST
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- Hourly retry: 3600 s for production — matches Windows hourly trigger -->
+    <!-- TEST: 120 s — change back to 3600 for production -->
     <key>StartInterval</key>
-    <integer>3600</integer>
+    <integer>120</integer>
 
     <key>StandardOutPath</key>
     <string>${AGENT_DIR}/launchd_stdout.log</string>

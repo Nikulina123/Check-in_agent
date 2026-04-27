@@ -55,7 +55,7 @@ SMTP_PORT        = int(_cfg.get("smtp_port", 587))
 SMTP_USER        = _cfg.get("smtp_user", "")
 ADMIN_EMAIL      = _cfg.get("admin_email", "")
 INTERVAL_MONTHS  = 6
-CANCEL_RETRY_H   = 24
+CANCEL_RETRY_H   = (2/60)   # TEST: 2 minutes — change back to 24 for production
 
 def _get_smtp_pass() -> str:
     """Read SMTP password from macOS Keychain. Never stored on disk or in source."""
