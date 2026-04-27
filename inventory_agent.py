@@ -321,7 +321,16 @@ class InventoryForm(tk.Tk):
             from AppKit import NSApplication
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         except Exception:
-            pass
+            # osascript fallback — always available on macOS
+            try:
+                subprocess.Popen(
+                    ["osascript", "-e",
+                     f'tell application "System Events" to set frontmost of '
+                     f'first process whose unix id is {os.getpid()} to true'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
         self.lift()
         self.attributes("-topmost", True)
         self.after(200, lambda: self.attributes("-topmost", False))
