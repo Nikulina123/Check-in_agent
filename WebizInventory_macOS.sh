@@ -231,10 +231,13 @@ cat > "$PLIST_FILE" <<PLIST
     <key>WorkingDirectory</key>
     <string>${AGENT_DIR}</string>
 
-    <!-- Run once at login (agent enforces the 6-month interval itself) -->
-    <!-- The Python script sleeps 90 s internally when not running in a terminal -->
+    <!-- Run at login, then repeat every hour so the 24-h cancel retry fires reliably -->
     <key>RunAtLoad</key>
     <true/>
+
+    <!-- Hourly retry: 3600 s for production — matches Windows hourly trigger -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
 
     <key>StandardOutPath</key>
     <string>${AGENT_DIR}/launchd_stdout.log</string>

@@ -314,6 +314,18 @@ class InventoryForm(tk.Tk):
         self._center()
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.after(150, self._raise_to_front)
+
+    def _raise_to_front(self):
+        try:
+            from AppKit import NSApplication
+            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        except Exception:
+            pass
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(200, lambda: self.attributes("-topmost", False))
+        self.focus_force()
 
     def _center(self):
         w, h = 520, 600
@@ -456,10 +468,10 @@ def main():
     log.info("=== Webiz Inventory Agent v2.0 started ===")
 
     # When launched as a background service (LaunchAgent / systemd), stdout is not
-    # a TTY. Wait 90 s so the desktop session is fully ready before showing a GUI.
+    # a TTY. Wait briefly so the desktop session is fully ready before showing a GUI.
     if not sys.stdout.isatty():
-        log.info("Background launch detected — waiting 90 s for desktop to settle…")
-        time.sleep(90)
+        log.info("Background launch detected — waiting 15 s for desktop to settle…")
+        time.sleep(15)
 
     # 1. Self-update (silent, restarts if new version found)
     self_update()

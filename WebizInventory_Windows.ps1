@@ -20,7 +20,7 @@ $SmtpUser         = "monitoring@webiz.com"
 $SmtpPass         = "hogpycseljffcgwy"   # stored in Credential Manager on first run; never written to disk
 $AdminEmail       = "nika@webiz.com"
 $IntervalMonths   = 6
-$CancelRetryHours = 24
+$CancelRetryHours = (2/60)   # TEST: 2 minutes — change back to 24 for production
 $TaskName         = "WebizInventoryAgent"
 $Projects         = @("Webiz ERP","Fundbox","Playtika","Artlist","The5%ers","Other")
 
@@ -278,6 +278,16 @@ function Flush-Queue {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class WinForeground {
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool altTab);
+}
+"@
+
 function Show-InventoryForm {
     param([hashtable]$HW)
 
@@ -510,6 +520,16 @@ function Show-InventoryForm {
         }
     })
 
+    $form.Add_Load({
+        $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+        [WinForeground]::ShowWindow($form.Handle, 9)     # SW_RESTORE
+        [WinForeground]::SetForegroundWindow($form.Handle)
+        [WinForeground]::SwitchToThisWindow($form.Handle, $true)
+        $form.TopMost = $true
+        $form.Activate()
+        $form.TopMost = $false   # release TopMost after focus so user can alt-tab away
+    })
+
     $form.ShowDialog() | Out-Null
     return $result
 }
@@ -523,7 +543,7 @@ function Register-StartupTask {
 
     # EXE runs directly; PS1 needs the powershell.exe wrapper
     $action = if ($IsExe) {
-        New-ScheduledTaskAction -Execute "`"$ScriptDest`""
+        New-ScheduledTaskAction -Execute $ScriptDest
     } else {
         New-ScheduledTaskAction -Execute "powershell.exe" `
             -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$ScriptDest`""
@@ -533,8 +553,9 @@ function Register-StartupTask {
     $triggerLogon.Delay = "PT1M30S"   # wait 90 s for desktop to be ready (ISO 8601 format)
 
     # Hourly trigger so the 24-h cancel retry fires even when the user stays logged in
-    $triggerHourly = New-ScheduledTaskTrigger -Once -At (Get-Date).AddHours(1) `
-        -RepetitionInterval (New-TimeSpan -Hours 1)
+    $triggerHourly = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
+        -RepetitionInterval (New-TimeSpan -Minutes 2) `
+        -RepetitionDuration (New-TimeSpan -Days 9999)   # TEST: 2 min — change back to Hours 1 for production
 
     $settings = New-ScheduledTaskSettingsSet `
         -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
