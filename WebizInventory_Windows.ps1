@@ -296,7 +296,7 @@ function Show-InventoryForm {
     # ── Form ──────────────────────────────────────────────────────────────────
     $form                  = New-Object System.Windows.Forms.Form
     $form.Text             = "Webiz Inventory Agent"
-    $form.ClientSize       = New-Object System.Drawing.Size(520, 640)
+    $form.ClientSize       = New-Object System.Drawing.Size(520, 684)
     $form.StartPosition    = "CenterScreen"
     $form.FormBorderStyle  = "FixedDialog"
     $form.MaximizeBox      = $false
@@ -393,6 +393,21 @@ function Show-InventoryForm {
     $form.Controls.Add($cbProject)
     $yPos += 44
 
+    # Screen size field
+    $lblScreen          = New-Object System.Windows.Forms.Label
+    $lblScreen.Text     = "Screen Size (in.) *"
+    $lblScreen.Location = New-Object System.Drawing.Point(26, ($yPos + 4))
+    $lblScreen.Size     = New-Object System.Drawing.Size(120, 22)
+    $lblScreen.Font     = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $form.Controls.Add($lblScreen)
+
+    $tbScreen           = New-Object System.Windows.Forms.TextBox
+    $tbScreen.Location  = New-Object System.Drawing.Point(152, $yPos)
+    $tbScreen.Size      = New-Object System.Drawing.Size(342, 28)
+    $tbScreen.Font      = New-Object System.Drawing.Font("Segoe UI", 10)
+    $form.Controls.Add($tbScreen)
+    $yPos += 44
+
     # ── Separator ─────────────────────────────────────────────────────────────
     $sep           = New-Object System.Windows.Forms.Panel
     $sep.Location  = New-Object System.Drawing.Point(26, ($yPos + 10))
@@ -481,12 +496,16 @@ function Show-InventoryForm {
         if ($tbEmail.Text -notmatch '^[^@]+@[^@]+\.[^@]+$') {
             [System.Windows.Forms.MessageBox]::Show("Please enter a valid email address.", "Invalid email") | Out-Null; return
         }
+        if (-not $tbScreen.Text.Trim()) {
+            [System.Windows.Forms.MessageBox]::Show("Please enter the screen size (inches).", "Missing field") | Out-Null; return
+        }
         $result.submitted = $true
         $result.user_data  = @{
-            first_name = $tbFirst.Text.Trim()
-            last_name  = $tbLast.Text.Trim()
-            email      = $tbEmail.Text.Trim()
-            project    = $cbProject.SelectedItem.ToString()
+            first_name  = $tbFirst.Text.Trim()
+            last_name   = $tbLast.Text.Trim()
+            email       = $tbEmail.Text.Trim()
+            project     = $cbProject.SelectedItem.ToString()
+            screen_size = $tbScreen.Text.Trim()
         }
         $form.Close()
     })
@@ -649,6 +668,7 @@ $payload = @{
     last_name     = $ud.last_name
     email         = $ud.email
     project       = $ud.project
+    screen_size   = $ud.screen_size
     hostname      = $hw.hostname
     ip_address    = $hw.ip_address
     brand         = $hw.brand
@@ -685,6 +705,7 @@ $body = "Hi $($ud.first_name),`n`n" +
         "Name      : $fullName`n" +
         "Email     : $($ud.email)`n" +
         "Project   : $($ud.project)`n" +
+        "Screen    : $($ud.screen_size) in.`n" +
         "$('─'*44)`n" +
         "Device    : $($hw.brand) $($hw.model)`n" +
         "Serial    : $($hw.serial_number)`n" +

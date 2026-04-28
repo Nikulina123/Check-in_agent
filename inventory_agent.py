@@ -337,7 +337,7 @@ class InventoryForm(tk.Tk):
         self.focus_force()
 
     def _center(self):
-        w, h = 520, 600
+        w, h = 520, 644
         self.update_idletasks()
         x = (self.winfo_screenwidth()  - w) // 2
         y = (self.winfo_screenheight() - h) // 2
@@ -394,6 +394,8 @@ class InventoryForm(tk.Tk):
             state="readonly", font=("Helvetica", 11), width=36,
         ).grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(10, 2))
 
+        self._e_screen  = self._field(form, 'Screen Size (in.) *', 4)
+
         # ── Device info preview ───────────────────────────────────────────────
         tk.Frame(self, bg="#D0D5DD", height=1).pack(fill="x", padx=26, pady=(12, 6))
         pf = tk.Frame(self, bg=BG_COLOR)
@@ -441,16 +443,20 @@ class InventoryForm(tk.Tk):
         if not re.match(r"[^@]+@[^@]+\.[^@]+", self._e_email.get().strip()):
             messagebox.showwarning("Invalid email", "Please enter a valid email address.", parent=self)
             return False
+        if not self._e_screen.get().strip():
+            messagebox.showwarning("Missing field", "Please enter the screen size (inches).", parent=self)
+            return False
         return True
 
     def _on_submit(self):
         if not self._validate():
             return
         self.user_data = {
-            "first_name": self._e_first.get().strip(),
-            "last_name":  self._e_last.get().strip(),
-            "email":      self._e_email.get().strip(),
-            "project":    self._v_project.get(),
+            "first_name":  self._e_first.get().strip(),
+            "last_name":   self._e_last.get().strip(),
+            "email":       self._e_email.get().strip(),
+            "project":     self._v_project.get(),
+            "screen_size": self._e_screen.get().strip(),
         }
         self.submitted = True
         self.destroy()
@@ -542,6 +548,7 @@ def main():
         f"Name      : {full_name}\n"
         f"Email     : {app.user_data['email']}\n"
         f"Project   : {app.user_data['project']}\n"
+        f"Screen    : {app.user_data.get('screen_size', 'N/A')} in.\n"
         f"{'─'*44}\n"
         f"Device    : {hw['brand']} {hw['model']}\n"
         f"Serial    : {hw.get('serial_number','N/A')}\n"
